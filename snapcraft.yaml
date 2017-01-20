@@ -20,6 +20,7 @@ apps:
     plugs:
       - network
       - network-bind
+      - network-control
 
 parts:
   zerotier-one:
