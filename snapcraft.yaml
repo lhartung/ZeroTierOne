@@ -13,6 +13,12 @@ description: |
 confinement: strict
 grade: stable
 
+slots:
+  zerotier-control:
+    interface: content
+    read:
+      - $SNAP_COMMON
+
 apps:
   zerotier-one:
     command: zerotier-one
