@@ -28,6 +28,16 @@ apps:
       - network-bind
       - network-control
 
+  zerotier-cli:
+    command: zerotier-cli
+    plugs:
+      - network
+
+  zerotier-idtool:
+    command: zerotier-idtool
+    plugs:
+      - network
+
 parts:
   zerotier-one:
     plugin: make
