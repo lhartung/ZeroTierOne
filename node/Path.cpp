@@ -22,10 +22,10 @@
 
 namespace ZeroTier {
 
-bool Path::send(const RuntimeEnvironment *RR,const void *data,unsigned int len,uint64_t now)
+bool Path::send(const RuntimeEnvironment *RR,void *tPtr,const void *data,unsigned int len,uint64_t now)
 {
-	if (RR->node->putPacket(_localAddress,address(),data,len)) {
-		sent(now);
+	if (RR->node->putPacket(tPtr,_localAddress,address(),data,len)) {
+		_lastOut = now;
 		return true;
 	}
 	return false;

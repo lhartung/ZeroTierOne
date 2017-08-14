@@ -61,15 +61,23 @@ public:
 
 	Dictionary(const char *s)
 	{
-		Utils::scopy(_d,sizeof(_d),s);
+		if (s) {
+			Utils::scopy(_d,sizeof(_d),s);
+		} else {
+			_d[0] = (char)0;
+		}
 	}
 
 	Dictionary(const char *s,unsigned int len)
 	{
-		if (len > (C-1))
-			len = C-1;
-		memcpy(_d,s,len);
-		_d[len] = (char)0;
+		if (s) {
+			if (len > (C-1))
+				len = C-1;
+			memcpy(_d,s,len);
+			_d[len] = (char)0;
+		} else {
+			_d[0] = (char)0;
+		}
 	}
 
 	Dictionary(const Dictionary &d)
@@ -91,7 +99,12 @@ public:
 	 */
 	inline bool load(const char *s)
 	{
-		return Utils::scopy(_d,sizeof(_d),s);
+		if (s) {
+			return Utils::scopy(_d,sizeof(_d),s);
+		} else {
+			_d[0] = (char)0;
+			return true;
+		}
 	}
 
 	/**
@@ -163,12 +176,12 @@ public:
 				j = 0;
 				esc = false;
 				++p;
-				while ((*p != 0)&&(*p != '\r')&&(*p != '\n')) {
+				while ((*p != 0)&&(*p != 13)&&(*p != 10)) {
 					if (esc) {
 						esc = false;
 						switch(*p) {
-							case 'r': dest[j++] = '\r'; break;
-							case 'n': dest[j++] = '\n'; break;
+							case 'r': dest[j++] = 13; break;
+							case 'n': dest[j++] = 10; break;
 							case '0': dest[j++] = (char)0; break;
 							case 'e': dest[j++] = '='; break;
 							default: dest[j++] = *p; break;
@@ -194,7 +207,7 @@ public:
 				dest[j] = (char)0;
 				return j;
 			} else {
-				while ((*p)&&(*p != '\r')&&(*p != '\n')) {
+				while ((*p)&&(*p != 13)&&(*p != 10)) {
 					if (++p == eof) {
 						dest[0] = (char)0;
 						return -1;
@@ -286,7 +299,7 @@ public:
 				unsigned int j = i;
 
 				if (j > 0) {
-					_d[j++] = '\n';
+					_d[j++] = (char)10;
 					if (j == C) {
 						_d[i] = (char)0;
 						return false;
@@ -313,8 +326,8 @@ public:
 				while ( ((vlen < 0)&&(*p)) || (k < vlen) ) {
 					switch(*p) {
 						case 0:
-						case '\r':
-						case '\n':
+						case 13:
+						case 10:
 						case '\\':
 						case '=':
 							_d[j++] = '\\';
@@ -324,8 +337,8 @@ public:
 							}
 							switch(*p) {
 								case 0: _d[j++] = '0'; break;
-								case '\r': _d[j++] = 'r'; break;
-								case '\n': _d[j++] = 'n'; break;
+								case 13: _d[j++] = 'r'; break;
+								case 10: _d[j++] = 'n'; break;
 								case '\\': _d[j++] = '\\'; break;
 								case '=': _d[j++] = 'e'; break;
 							}
@@ -404,54 +417,12 @@ public:
 	}
 
 	/**
-	 * Erase a key from this dictionary
-	 *
-	 * Use this before add() to ensure that a key is replaced if it might
-	 * already be present.
-	 *
-	 * @param key Key to erase
-	 * @return True if key was found and erased
-	 */
-	inline bool erase(const char *key)
-	{
-		char d2[C];
-		char *saveptr = (char *)0;
-		unsigned int d2ptr = 0;
-		bool found = false;
-		for(char *f=Utils::stok(_d,"\r\n",&saveptr);(f);f=Utils::stok((char *)0,"\r\n",&saveptr)) {
-			if (*f) {
-				const char *p = f;
-				const char *k = key;
-				while ((*k)&&(*p)) {
-					if (*k != *p)
-						break;
-					++k;
-					++p;
-				}
-				if (*k) {
-					p = f;
-					while (*p)
-						d2[d2ptr++] = *(p++);
-					d2[d2ptr++] = '\n';
-				} else {
-					found = true;
-				}
-			}
-		}
-		d2[d2ptr++] = (char)0;
-		memcpy(_d,d2,d2ptr);
-		return found;
-	}
-
-	/**
-	 * @return Dictionary data as a 0-terminated C-string
-	 */
-	inline const char *data() const { return _d; }
-
-	/**
 	 * @return Value of C template parameter
 	 */
 	inline unsigned int capacity() const { return C; }
+
+	inline const char *data() const { return _d; }
+	inline char *unsafeData() { return _d; }
 
 private:
 	char _d[C];

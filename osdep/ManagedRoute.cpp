@@ -57,8 +57,6 @@
 #define ZT_LINUX_IP_COMMAND "/sbin/ip"
 #define ZT_LINUX_IP_COMMAND_2 "/usr/sbin/ip"
 
-// NOTE: BSD is mostly tested on Apple/Mac but is likely to work on other BSD too
-
 namespace ZeroTier {
 
 namespace {
@@ -69,22 +67,27 @@ static void _forkTarget(const InetAddress &t,InetAddress &left,InetAddress &righ
 {
 	const unsigned int bits = t.netmaskBits() + 1;
 	left = t;
-	if ((t.ss_family == AF_INET)&&(bits <= 32)) {
-		left.setPort(bits);
-		right = t;
-		reinterpret_cast<struct sockaddr_in *>(&right)->sin_addr.s_addr ^= Utils::hton((uint32_t)(1 << (32 - bits)));
-		right.setPort(bits);
-	} else if ((t.ss_family == AF_INET6)&&(bits <= 128)) {
-		left.setPort(bits);
-		right = t;
-		uint8_t *b = reinterpret_cast<uint8_t *>(reinterpret_cast<struct sockaddr_in6 *>(&right)->sin6_addr.s6_addr);
-		b[bits / 8] ^= 1 << (8 - (bits % 8));
-		right.setPort(bits);
+	if (t.ss_family == AF_INET) {
+		if (bits <= 32) {
+			left.setPort(bits);
+			right = t;
+			reinterpret_cast<struct sockaddr_in *>(&right)->sin_addr.s_addr ^= Utils::hton((uint32_t)(1 << (32 - bits)));
+			right.setPort(bits);
+		} else {
+			right.zero();
+		}
+	} else if (t.ss_family == AF_INET6) {
+		if (bits <= 128) {
+			left.setPort(bits);
+			right = t;
+			uint8_t *b = reinterpret_cast<uint8_t *>(reinterpret_cast<struct sockaddr_in6 *>(&right)->sin6_addr.s6_addr);
+			b[bits / 8] ^= 1 << (8 - (bits % 8));
+			right.setPort(bits);
+		} else {
+			right.zero();
+		}
 	}
 }
-
-#ifdef __BSD__ // ------------------------------------------------------------
-#define ZT_ROUTING_SUPPORT_FOUND 1
 
 struct _RTE
 {
@@ -94,6 +97,9 @@ struct _RTE
 	int metric;
 	bool ifscope;
 };
+
+#ifdef __BSD__ // ------------------------------------------------------------
+#define ZT_ROUTING_SUPPORT_FOUND 1
 
 static std::vector<_RTE> _getRTEs(const InetAddress &target,bool contains)
 {
@@ -232,6 +238,7 @@ static std::vector<_RTE> _getRTEs(const InetAddress &target,bool contains)
 
 static void _routeCmd(const char *op,const InetAddress &target,const InetAddress &via,const char *ifscope,const char *localInterface)
 {
+	//printf("route %s %s %s %s %s\n",op,target.toString().c_str(),(via) ? via.toString().c_str() : "(null)",(ifscope) ? ifscope : "(null)",(localInterface) ? localInterface : "(null)");
 	long p = (long)fork();
 	if (p > 0) {
 		int exitcode = -1;
@@ -339,10 +346,42 @@ static bool _winRoute(bool del,const NET_LUID &interfaceLuid,const NET_IFINDEX &
 	}
 }
 
+static bool _winHasRoute(const NET_LUID &interfaceLuid, const NET_IFINDEX &interfaceIndex, const InetAddress &target, const InetAddress &via)
+{
+	MIB_IPFORWARD_ROW2 rtrow;
+	InitializeIpForwardEntry(&rtrow);
+	rtrow.InterfaceLuid.Value = interfaceLuid.Value;
+	rtrow.InterfaceIndex = interfaceIndex;
+	if (target.ss_family == AF_INET) {
+		rtrow.DestinationPrefix.Prefix.si_family = AF_INET;
+		rtrow.DestinationPrefix.Prefix.Ipv4.sin_family = AF_INET;
+		rtrow.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr = reinterpret_cast<const struct sockaddr_in *>(&target)->sin_addr.S_un.S_addr;
+		if (via.ss_family == AF_INET) {
+			rtrow.NextHop.si_family = AF_INET;
+			rtrow.NextHop.Ipv4.sin_family = AF_INET;
+			rtrow.NextHop.Ipv4.sin_addr.S_un.S_addr = reinterpret_cast<const struct sockaddr_in *>(&via)->sin_addr.S_un.S_addr;
+		}
+	} else if (target.ss_family == AF_INET6) {
+		rtrow.DestinationPrefix.Prefix.si_family = AF_INET6;
+		rtrow.DestinationPrefix.Prefix.Ipv6.sin6_family = AF_INET6;
+		memcpy(rtrow.DestinationPrefix.Prefix.Ipv6.sin6_addr.u.Byte, reinterpret_cast<const struct sockaddr_in6 *>(&target)->sin6_addr.u.Byte, 16);
+		if (via.ss_family == AF_INET6) {
+			rtrow.NextHop.si_family = AF_INET6;
+			rtrow.NextHop.Ipv6.sin6_family = AF_INET6;
+			memcpy(rtrow.NextHop.Ipv6.sin6_addr.u.Byte, reinterpret_cast<const struct sockaddr_in6 *>(&via)->sin6_addr.u.Byte, 16);
+		}
+	} else {
+		return false;
+	}
+	rtrow.DestinationPrefix.PrefixLength = target.netmaskBits();
+	rtrow.SitePrefixLength = rtrow.DestinationPrefix.PrefixLength;
+	return (GetIpForwardEntry2(&rtrow) == NO_ERROR);
+}
+
 #endif // __WINDOWS__ --------------------------------------------------------
 
 #ifndef ZT_ROUTING_SUPPORT_FOUND
-#error "ManagedRoute.cpp has no support for managing routes on this platform! You'll need to check and see if one of the existing ones will work and make sure proper defines are set, or write one. Please do a Github pull request if you do this for a new OS."
+#error "ManagedRoute.cpp has no support for managing routes on this platform! You'll need to check and see if one of the existing ones will work and make sure proper defines are set, or write one. Please do a GitHub pull request if you do this for a new OS."
 #endif
 
 } // anonymous namespace
@@ -369,144 +408,103 @@ bool ManagedRoute::sync()
 		return false;
 #endif
 
-	if ((_target.isDefaultRoute())||((_target.ss_family == AF_INET)&&(_target.netmaskBits() < 32))) {
-		/* In ZeroTier we create two more specific routes for every one route. We
-		 * do this for default routes and IPv4 routes other than /32s. If there
-		 * is a pre-existing system route that this route will override, we create
-		 * two more specific interface-bound shadow routes for it.
-		 *
-		 * This means that ZeroTier can *itself* continue communicating over
-		 * whatever physical routes might be present while simultaneously
-		 * overriding them for general system traffic. This is mostly for
-		 * "full tunnel" VPN modes of operation, but might be useful for
-		 * virtualizing physical networks in a hybrid design as well. */
-
-		// Generate two more specific routes than target with one extra bit
-		InetAddress leftt,rightt;
+	InetAddress leftt,rightt;
+	if (_target.netmaskBits() == 0) // bifurcate only the default route
 		_forkTarget(_target,leftt,rightt);
+	else leftt = _target;
 
 #ifdef __BSD__ // ------------------------------------------------------------
 
-		// Find lowest metric system route that this route should override (if any)
-		InetAddress newSystemVia;
-		char newSystemDevice[128];
-		newSystemDevice[0] = (char)0;
-		int systemMetric = 9999999;
-		std::vector<_RTE> rtes(_getRTEs(_target,false));
+	// Find lowest metric system route that this route should override (if any)
+	InetAddress newSystemVia;
+	char newSystemDevice[128];
+	newSystemDevice[0] = (char)0;
+	int systemMetric = 9999999;
+	std::vector<_RTE> rtes(_getRTEs(_target,false));
+	for(std::vector<_RTE>::iterator r(rtes.begin());r!=rtes.end();++r) {
+		if (r->via) {
+			if ( ((!newSystemVia)||(r->metric < systemMetric)) && (strcmp(r->device,_device) != 0) ) {
+				newSystemVia = r->via;
+				Utils::scopy(newSystemDevice,sizeof(newSystemDevice),r->device);
+				systemMetric = r->metric;
+			}
+		}
+	}
+
+	// Get device corresponding to route if we don't have that already
+	if ((newSystemVia)&&(!newSystemDevice[0])) {
+		rtes = _getRTEs(newSystemVia,true);
 		for(std::vector<_RTE>::iterator r(rtes.begin());r!=rtes.end();++r) {
-			if (r->via) {
-				if ((!newSystemVia)||(r->metric < systemMetric)) {
-					newSystemVia = r->via;
-					Utils::scopy(newSystemDevice,sizeof(newSystemDevice),r->device);
-					systemMetric = r->metric;
-				}
+			if ( (r->device[0]) && (strcmp(r->device,_device) != 0) ) {
+				Utils::scopy(newSystemDevice,sizeof(newSystemDevice),r->device);
+				break;
 			}
 		}
-		if ((newSystemVia)&&(!newSystemDevice[0])) {
-			rtes = _getRTEs(newSystemVia,true);
-			for(std::vector<_RTE>::iterator r(rtes.begin());r!=rtes.end();++r) {
-				if (r->device[0]) {
-					Utils::scopy(newSystemDevice,sizeof(newSystemDevice),r->device);
-					break;
-				}
-			}
-		}
+	}
+	if (!newSystemDevice[0])
+		newSystemVia.zero();
 
-		// Shadow system route if it exists, also delete any obsolete shadows
-		// and replace them with the new state. sync() is called periodically to
-		// allow us to do that if underlying connectivity changes.
-		if ( ((_systemVia != newSystemVia)||(strcmp(_systemDevice,newSystemDevice))) && (strcmp(_device,newSystemDevice)) ) {
-			if ((_systemVia)&&(_systemDevice[0])) {
-				_routeCmd("delete",leftt,_systemVia,_systemDevice,(const char *)0);
+	// Shadow system route if it exists, also delete any obsolete shadows
+	// and replace them with the new state. sync() is called periodically to
+	// allow us to do that if underlying connectivity changes.
+	if ((_systemVia != newSystemVia)||(strcmp(_systemDevice,newSystemDevice) != 0)) {
+		if (_systemVia) {
+			_routeCmd("delete",leftt,_systemVia,_systemDevice,(const char *)0);
+			if (rightt)
 				_routeCmd("delete",rightt,_systemVia,_systemDevice,(const char *)0);
-			}
+		}
 
-			_systemVia = newSystemVia;
-			Utils::scopy(_systemDevice,sizeof(_systemDevice),newSystemDevice);
+		_systemVia = newSystemVia;
+		Utils::scopy(_systemDevice,sizeof(_systemDevice),newSystemDevice);
 
-			if ((_systemVia)&&(_systemDevice[0])) {
-				_routeCmd("add",leftt,_systemVia,_systemDevice,(const char *)0);
-				_routeCmd("change",leftt,_systemVia,_systemDevice,(const char *)0);
+		if (_systemVia) {
+			_routeCmd("add",leftt,_systemVia,_systemDevice,(const char *)0);
+			_routeCmd("change",leftt,_systemVia,_systemDevice,(const char *)0);
+			if (rightt) {
 				_routeCmd("add",rightt,_systemVia,_systemDevice,(const char *)0);
 				_routeCmd("change",rightt,_systemVia,_systemDevice,(const char *)0);
 			}
 		}
-
-		// Apply overriding non-device-scoped routes
-		if (!_applied) {
-			if (_via) {
-				_routeCmd("add",leftt,_via,(const char *)0,(const char *)0);
-				_routeCmd("change",leftt,_via,(const char *)0,(const char *)0);
-				_routeCmd("add",rightt,_via,(const char *)0,(const char *)0);
-				_routeCmd("change",rightt,_via,(const char *)0,(const char *)0);
-			} else if (_device[0]) {
-				_routeCmd("add",leftt,_via,(const char *)0,_device);
-				_routeCmd("change",leftt,_via,(const char *)0,_device);
-				_routeCmd("add",rightt,_via,(const char *)0,_device);
-				_routeCmd("change",rightt,_via,(const char *)0,_device);
-			}
-
-			_applied = true;
-		}
-
-#endif // __BSD__ ------------------------------------------------------------
-
-#ifdef __LINUX__ // ----------------------------------------------------------
-
-		if (!_applied) {
-			_routeCmd("replace",leftt,_via,(_via) ? _device : (const char *)0);
-			_routeCmd("replace",rightt,_via,(_via) ? _device : (const char *)0);
-			_applied = true;
-		}
-
-#endif // __LINUX__ ----------------------------------------------------------
-
-#ifdef __WINDOWS__ // --------------------------------------------------------
-
-		if (!_applied) {
-			_winRoute(false,interfaceLuid,interfaceIndex,leftt,_via);
-			_winRoute(false,interfaceLuid,interfaceIndex,rightt,_via);
-			_applied = true;
-		}
-
-#endif // __WINDOWS__ --------------------------------------------------------
-
-	} else {
-
-#ifdef __BSD__ // ------------------------------------------------------------
-
-		if (!_applied) {
-			if (_via) {
-				_routeCmd("add",_target,_via,(const char *)0,(const char *)0);
-				_routeCmd("change",_target,_via,(const char *)0,(const char *)0);
-			} else if (_device[0]) {
-				_routeCmd("add",_target,_via,(const char *)0,_device);
-				_routeCmd("change",_target,_via,(const char *)0,_device);
-			}
-			_applied = true;
-		}
-
-#endif // __BSD__ ------------------------------------------------------------
-
-#ifdef __LINUX__ // ----------------------------------------------------------
-
-		if (!_applied) {
-			_routeCmd("replace",_target,_via,(_via) ? _device : (const char *)0);
-			_applied = true;
-		}
-
-#endif // __LINUX__ ----------------------------------------------------------
-
-#ifdef __WINDOWS__ // --------------------------------------------------------
-
-		if (!_applied) {
-			_winRoute(false,interfaceLuid,interfaceIndex,_target,_via);
-			_applied = true;
-		}
-
-#endif // __WINDOWS__ --------------------------------------------------------
-
 	}
+
+	if (!_applied.count(leftt)) {
+		_applied[leftt] = false; // not ifscoped
+		_routeCmd("add",leftt,_via,(const char *)0,(_via) ? (const char *)0 : _device);
+		_routeCmd("change",leftt,_via,(const char *)0,(_via) ? (const char *)0 : _device);
+	}
+	if ((rightt)&&(!_applied.count(rightt))) {
+		_applied[rightt] = false; // not ifscoped
+		_routeCmd("add",rightt,_via,(const char *)0,(_via) ? (const char *)0 : _device);
+		_routeCmd("change",rightt,_via,(const char *)0,(_via) ? (const char *)0 : _device);
+	}
+
+#endif // __BSD__ ------------------------------------------------------------
+
+#ifdef __LINUX__ // ----------------------------------------------------------
+
+	if (!_applied.count(leftt)) {
+		_applied[leftt] = false; // boolean unused
+		_routeCmd("replace",leftt,_via,(_via) ? (const char *)0 : _device);
+	}
+	if ((rightt)&&(!_applied.count(rightt))) {
+		_applied[rightt] = false; // boolean unused
+		_routeCmd("replace",rightt,_via,(_via) ? (const char *)0 : _device);
+	}
+
+#endif // __LINUX__ ----------------------------------------------------------
+
+#ifdef __WINDOWS__ // --------------------------------------------------------
+
+	if ( (!_applied.count(leftt)) || (!_winHasRoute(interfaceLuid,interfaceIndex,leftt,_via)) ) {
+		_applied[leftt] = false; // boolean unused
+		_winRoute(false,interfaceLuid,interfaceIndex,leftt,_via);
+	}
+	if ( (rightt) && ( (!_applied.count(rightt)) || (!_winHasRoute(interfaceLuid,interfaceIndex,rightt,_via)) ) ) {
+		_applied[rightt] = false; // boolean unused
+		_winRoute(false,interfaceLuid,interfaceIndex,rightt,_via);
+	}
+
+#endif // __WINDOWS__ --------------------------------------------------------
 
 	return true;
 }
@@ -521,66 +519,28 @@ void ManagedRoute::remove()
 		return;
 #endif
 
-	if (_applied) {
-		if ((_target.isDefaultRoute())||((_target.ss_family == AF_INET)&&(_target.netmaskBits() < 32))) {
-			InetAddress leftt,rightt;
-			_forkTarget(_target,leftt,rightt);
+#ifdef __BSD__
+	if (_systemVia) {
+		InetAddress leftt,rightt;
+		_forkTarget(_target,leftt,rightt);
+		_routeCmd("delete",leftt,_systemVia,_systemDevice,(const char *)0);
+		if (rightt)
+			_routeCmd("delete",rightt,_systemVia,_systemDevice,(const char *)0);
+	}
+#endif // __BSD__ ------------------------------------------------------------
 
+	for(std::map<InetAddress,bool>::iterator r(_applied.begin());r!=_applied.end();++r) {
 #ifdef __BSD__ // ------------------------------------------------------------
-
-			if ((_systemVia)&&(_systemDevice[0])) {
-				_routeCmd("delete",leftt,_systemVia,_systemDevice,(const char *)0);
-				_routeCmd("delete",rightt,_systemVia,_systemDevice,(const char *)0);
-			}
-			if (_via) {
-				_routeCmd("delete",leftt,_via,(const char *)0,(const char *)0);
-				_routeCmd("delete",rightt,_via,(const char *)0,(const char *)0);
-			} else if (_device[0]) {
-				_routeCmd("delete",leftt,_via,(const char *)0,_device);
-				_routeCmd("delete",rightt,_via,(const char *)0,_device);
-			}
-
+		_routeCmd("delete",r->first,_via,r->second ? _device : (const char *)0,(_via) ? (const char *)0 : _device);
 #endif // __BSD__ ------------------------------------------------------------
 
 #ifdef __LINUX__ // ----------------------------------------------------------
-
-			_routeCmd("del",leftt,_via,(_via) ? _device : (const char *)0);
-			_routeCmd("del",rightt,_via,(_via) ? _device : (const char *)0);
-
+		_routeCmd("del",r->first,_via,(_via) ? (const char *)0 : _device);
 #endif // __LINUX__ ----------------------------------------------------------
 
 #ifdef __WINDOWS__ // --------------------------------------------------------
-
-			_winRoute(true,interfaceLuid,interfaceIndex,leftt,_via);
-			_winRoute(true,interfaceLuid,interfaceIndex,rightt,_via);
-
+		_winRoute(true,interfaceLuid,interfaceIndex,r->first,_via);
 #endif // __WINDOWS__ --------------------------------------------------------
-
-		} else {
-
-#ifdef __BSD__ // ------------------------------------------------------------
-
-		if (_via) {
-			_routeCmd("delete",_target,_via,(const char *)0,(const char *)0);
-		} else if (_device[0]) {
-			_routeCmd("delete",_target,_via,(const char *)0,_device);
-		}
-
-#endif // __BSD__ ------------------------------------------------------------
-
-#ifdef __LINUX__ // ----------------------------------------------------------
-
-			_routeCmd("del",_target,_via,(_via) ? _device : (const char *)0);
-
-#endif // __LINUX__ ----------------------------------------------------------
-
-#ifdef __WINDOWS__ // --------------------------------------------------------
-
-			_winRoute(true,interfaceLuid,interfaceIndex,_target,_via);
-
-#endif // __WINDOWS__ --------------------------------------------------------
-
-		}
 	}
 
 	_target.zero();
@@ -588,7 +548,7 @@ void ManagedRoute::remove()
 	_systemVia.zero();
 	_device[0] = (char)0;
 	_systemDevice[0] = (char)0;
-	_applied = false;
+	_applied.clear();
 }
 
 } // namespace ZeroTier

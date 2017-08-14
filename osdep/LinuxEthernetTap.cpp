@@ -62,7 +62,7 @@ LinuxEthernetTap::LinuxEthernetTap(
 	unsigned int metric,
 	uint64_t nwid,
 	const char *friendlyName,
-	void (*handler)(void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int),
+	void (*handler)(void *,void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int),
 	void *arg) :
 	_handler(handler),
 	_arg(arg),
@@ -93,23 +93,40 @@ LinuxEthernetTap::LinuxEthernetTap(
 	memset(&ifr,0,sizeof(ifr));
 
 	// Try to recall our last device name, or pick an unused one if that fails.
-	bool recalledDevice = false;
-	std::string devmapbuf;
-	Dictionary<8194> devmap;
-	if (OSUtils::readFile((_homePath + ZT_PATH_SEPARATOR_S + "devicemap").c_str(),devmapbuf)) {
-		devmap.load(devmapbuf.c_str());
-		char desiredDevice[128];
-		if (devmap.get(nwids,desiredDevice,sizeof(desiredDevice)) > 0) {
-			Utils::scopy(ifr.ifr_name,sizeof(ifr.ifr_name),desiredDevice);
-			Utils::snprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
-			recalledDevice = (stat(procpath,&sbuf) != 0);
+	std::map<std::string,std::string> globalDeviceMap;
+	FILE *devmapf = fopen((_homePath + ZT_PATH_SEPARATOR_S + "devicemap").c_str(),"r");
+	if (devmapf) {
+		char buf[256];
+		while (fgets(buf,sizeof(buf),devmapf)) {
+			char *x = (char *)0;
+			char *y = (char *)0;
+			char *saveptr = (char *)0;
+			for(char *f=Utils::stok(buf,"\r\n=",&saveptr);(f);f=Utils::stok((char *)0,"\r\n=",&saveptr)) {
+				if (!x) x = f;
+				else if (!y) y = f;
+				else break;
+			}
+			if ((x)&&(y)&&(x[0])&&(y[0]))
+				globalDeviceMap[x] = y;
 		}
+		fclose(devmapf);
 	}
-
+	bool recalledDevice = false;
+	std::map<std::string,std::string>::const_iterator gdmEntry = globalDeviceMap.find(nwids);
+	if (gdmEntry != globalDeviceMap.end()) {
+		Utils::scopy(ifr.ifr_name,sizeof(ifr.ifr_name),gdmEntry->second.c_str());
+		Utils::snprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
+		recalledDevice = (stat(procpath,&sbuf) != 0);
+	}
 	if (!recalledDevice) {
 		int devno = 0;
 		do {
+#ifdef __SYNOLOGY__
+			devno+=50; // Arbitrary number to prevent interface name conflicts
+			Utils::snprintf(ifr.ifr_name,sizeof(ifr.ifr_name),"eth%d",devno++);
+#else
 			Utils::snprintf(ifr.ifr_name,sizeof(ifr.ifr_name),"zt%d",devno++);
+#endif
 			Utils::snprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
 		} while (stat(procpath,&sbuf) == 0); // try zt#++ until we find one that does not exist
 	}
@@ -174,9 +191,16 @@ LinuxEthernetTap::LinuxEthernetTap(
 
 	(void)::pipe(_shutdownSignalPipe);
 
-	devmap.erase(nwids);
-	devmap.add(nwids,_dev.c_str());
-	OSUtils::writeFile((_homePath + ZT_PATH_SEPARATOR_S + "devicemap").c_str(),(const void *)devmap.data(),devmap.sizeBytes());
+	globalDeviceMap[nwids] = _dev;
+	devmapf = fopen((_homePath + ZT_PATH_SEPARATOR_S + "devicemap").c_str(),"w");
+	if (devmapf) {
+		gdmEntry = globalDeviceMap.begin();
+		while (gdmEntry != globalDeviceMap.end()) {
+			fprintf(devmapf,"%s=%s\n",gdmEntry->first.c_str(),gdmEntry->second.c_str());
+			++gdmEntry;
+		}
+		fclose(devmapf);
+	}
 
 	_thread = Thread::start(this);
 }
@@ -214,6 +238,59 @@ static bool ___removeIp(const std::string &_dev,const InetAddress &ip)
 		return (exitcode == 0);
 	}
 }
+
+#ifdef __SYNOLOGY__
+bool LinuxEthernetTap::addIpSyn(std::vector<InetAddress> ips)
+{
+	// Here we fill out interface config (ifcfg-dev) to prevent it from being killed
+	std::string filepath = "/etc/sysconfig/network-scripts/ifcfg-"+_dev;
+	std::string cfg_contents = "DEVICE="+_dev+"\nBOOTPROTO=static";
+	int ip4=0,ip6=0,ip4_tot=0,ip6_tot=0;
+
+	long cpid = (long)vfork();
+	if (cpid == 0) {
+		OSUtils::redirectUnixOutputs("/dev/null",(const char *)0);
+		setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin", 1);
+		// We must know if there is at least (one) of each protocol version so we 
+		// can properly enumerate address/netmask combinations in the ifcfg-dev file
+		for(int i=0; i<(int)ips.size(); i++) {
+			if (ips[i].isV4())
+				ip4_tot++;
+			else
+				ip6_tot++;
+		}
+		// Assemble and write contents of ifcfg-dev file
+		for(int i=0; i<(int)ips.size(); i++) {
+			if (ips[i].isV4()) {
+				std::string numstr4 = ip4_tot > 1 ? std::to_string(ip4) : "";
+				cfg_contents += "\nIPADDR"+numstr4+"="+ips[i].toIpString()
+					+ "\nNETMASK"+numstr4+"="+ips[i].netmask().toIpString()+"\n";
+				ip4++;
+			}
+			else {
+				std::string numstr6 = ip6_tot > 1 ? std::to_string(ip6) : "";
+				cfg_contents += "\nIPV6ADDR"+numstr6+"="+ips[i].toIpString()
+					+ "\nNETMASK"+numstr6+"="+ips[i].netmask().toIpString()+"\n";
+				ip6++;
+			}
+		}
+		OSUtils::writeFile(filepath.c_str(), cfg_contents.c_str(), cfg_contents.length());
+		// Finaly, add IPs
+		for(int i=0; i<(int)ips.size(); i++){
+			if (ips[i].isV4())
+				::execlp("ip","ip","addr","add",ips[i].toString().c_str(),"broadcast",ips[i].broadcast().toIpString().c_str(),"dev",_dev.c_str(),(const char *)0);
+			else
+				::execlp("ip","ip","addr","add",ips[i].toString().c_str(),"dev",_dev.c_str(),(const char *)0);			
+		}
+		::_exit(-1);
+	} else if (cpid > 0) {
+		int exitcode = -1;
+		::waitpid(cpid,&exitcode,0);
+		return (exitcode == 0);
+	}
+	return true;
+}
+#endif // __SYNOLOGY__
 
 bool LinuxEthernetTap::addIp(const InetAddress &ip)
 {
@@ -412,7 +489,7 @@ void LinuxEthernetTap::threadMain()
 						from.setTo(getBuf + 6,6);
 						unsigned int etherType = ntohs(((const uint16_t *)getBuf)[6]);
 						// TODO: VLAN support
-						_handler(_arg,_nwid,from,to,etherType,0,(const void *)(getBuf + 14),r - 14);
+						_handler(_arg,(void *)0,_nwid,from,to,etherType,0,(const void *)(getBuf + 14),r - 14);
 					}
 
 					r = 0;

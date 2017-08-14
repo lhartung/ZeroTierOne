@@ -87,7 +87,7 @@ public:
 		unsigned int metric,
 		uint64_t nwid,
 		const char *friendlyName,
-		void (*handler)(void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int),
+		void (*handler)(void *,void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int),
 		void *arg);
 
 	~WindowsEthernetTap();
@@ -110,13 +110,15 @@ public:
 	void threadMain()
 		throw();
 
+    bool isInitialized() const { return _initialized; };
+
 private:
 	NET_IFINDEX _getDeviceIndex(); // throws on failure
 	std::vector<std::string> _getRegistryIPv4Value(const char *regKey);
 	void _setRegistryIPv4Value(const char *regKey,const std::vector<std::string> &value);
 	void _syncIps();
 
-	void (*_handler)(void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int);
+	void (*_handler)(void *,void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int);
 	void *_arg;
 	MAC _mac;
 	uint64_t _nwid;

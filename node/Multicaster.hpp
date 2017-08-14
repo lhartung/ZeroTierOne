@@ -90,10 +90,10 @@ public:
 	 * @param mg Multicast group
 	 * @param member New member address
 	 */
-	inline void add(uint64_t now,uint64_t nwid,const MulticastGroup &mg,const Address &member)
+	inline void add(void *tPtr,uint64_t now,uint64_t nwid,const MulticastGroup &mg,const Address &member)
 	{
 		Mutex::Lock _l(_groups_m);
-		_add(now,nwid,mg,_groups[Multicaster::Key(nwid,mg)],member);
+		_add(tPtr,now,nwid,mg,_groups[Multicaster::Key(nwid,mg)],member);
 	}
 
 	/**
@@ -101,6 +101,7 @@ public:
 	 *
 	 * It's up to the caller to check bounds on the array before calling this.
 	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param now Current time
 	 * @param nwid Network ID
 	 * @param mg Multicast group
@@ -108,7 +109,7 @@ public:
 	 * @param count Number of addresses
 	 * @param totalKnown Total number of known addresses as reported by peer
 	 */
-	void addMultiple(uint64_t now,uint64_t nwid,const MulticastGroup &mg,const void *addresses,unsigned int count,unsigned int totalKnown);
+	void addMultiple(void *tPtr,uint64_t now,uint64_t nwid,const MulticastGroup &mg,const void *addresses,unsigned int count,unsigned int totalKnown);
 
 	/**
 	 * Remove a multicast group member (if present)
@@ -150,10 +151,11 @@ public:
 	/**
 	 * Send a multicast
 	 *
-	 * @param com Certificate of membership to include or NULL for none
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param limit Multicast limit
 	 * @param now Current time
 	 * @param nwid Network ID
+	 * @param disableCompression Disable packet payload compression?
 	 * @param alwaysSendTo Send to these peers first and even if not included in subscriber list
 	 * @param mg Multicast group
 	 * @param src Source Ethernet MAC address or NULL to skip in packet and compute from ZT address (non-bridged mode)
@@ -162,10 +164,11 @@ public:
 	 * @param len Length of packet data
 	 */
 	void send(
-		const CertificateOfMembership *com,
+		void *tPtr,
 		unsigned int limit,
 		uint64_t now,
 		uint64_t nwid,
+		bool disableCompression,
 		const std::vector<Address> &alwaysSendTo,
 		const MulticastGroup &mg,
 		const MAC &src,
@@ -181,12 +184,52 @@ public:
 	 */
 	void clean(uint64_t now);
 
+	/**
+	 * Add an authorization credential
+	 *
+	 * The Multicaster keeps its own track of when valid credentials of network
+	 * membership are presented. This allows it to control MULTICAST_LIKE
+	 * GATHER authorization for networks this node does not belong to.
+	 *
+	 * @param com Certificate of membership
+	 * @param alreadyValidated If true, COM has already been checked and found to be valid and signed
+	 */
+	void addCredential(void *tPtr,const CertificateOfMembership &com,bool alreadyValidated);
+
+	/**
+	 * Check authorization for GATHER and LIKE for non-network-members
+	 *
+	 * @param a Address of peer
+	 * @param nwid Network ID
+	 * @param now Current time
+	 * @return True if GATHER and LIKE should be allowed
+	 */
+	bool cacheAuthorized(const Address &a,const uint64_t nwid,const uint64_t now) const
+	{
+		Mutex::Lock _l(_gatherAuth_m);
+		const uint64_t *p = _gatherAuth.get(_GatherAuthKey(nwid,a));
+		return ((p)&&((now - *p) < ZT_MULTICAST_CREDENTIAL_EXPIRATON));
+	}
+
 private:
-	void _add(uint64_t now,uint64_t nwid,const MulticastGroup &mg,MulticastGroupStatus &gs,const Address &member);
+	void _add(void *tPtr,uint64_t now,uint64_t nwid,const MulticastGroup &mg,MulticastGroupStatus &gs,const Address &member);
 
 	const RuntimeEnvironment *RR;
+
 	Hashtable<Multicaster::Key,MulticastGroupStatus> _groups;
 	Mutex _groups_m;
+
+	struct _GatherAuthKey
+	{
+		_GatherAuthKey() : member(0),networkId(0) {}
+		_GatherAuthKey(const uint64_t nwid,const Address &a) : member(a.toInt()),networkId(nwid) {}
+		inline unsigned long hashCode() const { return (unsigned long)(member ^ networkId); }
+		inline bool operator==(const _GatherAuthKey &k) const { return ((member == k.member)&&(networkId == k.networkId)); }
+		uint64_t member;
+		uint64_t networkId;
+	};
+	Hashtable< _GatherAuthKey,uint64_t > _gatherAuth;
+	Mutex _gatherAuth_m;
 };
 
 } // namespace ZeroTier

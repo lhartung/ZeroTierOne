@@ -56,7 +56,7 @@ public:
 	 * @param RR Runtime environment
 	 * @param timestamp Creation time
 	 * @param nwid Network ID
-	 * @param com Certificate of membership or NULL if none available
+	 * @param disableCompression Disable compression of frame payload
 	 * @param limit Multicast limit for desired number of packets to send
 	 * @param gatherLimit Number to lazily/implicitly gather with this frame or 0 for none
 	 * @param src Source MAC address of frame or NULL to imply compute from sender ZT address
@@ -70,7 +70,7 @@ public:
 		const RuntimeEnvironment *RR,
 		uint64_t timestamp,
 		uint64_t nwid,
-		const CertificateOfMembership *com,
+		bool disableCompression,
 		unsigned int limit,
 		unsigned int gatherLimit,
 		const MAC &src,
@@ -99,45 +99,53 @@ public:
 	 * Just send without checking log
 	 *
 	 * @param RR Runtime environment
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param toAddr Destination address
 	 */
-	void sendOnly(const RuntimeEnvironment *RR,const Address &toAddr);
+	void sendOnly(const RuntimeEnvironment *RR,void *tPtr,const Address &toAddr);
 
 	/**
 	 * Just send and log but do not check sent log
 	 *
 	 * @param RR Runtime environment
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param toAddr Destination address
 	 */
-	inline void sendAndLog(const RuntimeEnvironment *RR,const Address &toAddr)
+	inline void sendAndLog(const RuntimeEnvironment *RR,void *tPtr,const Address &toAddr)
 	{
 		_alreadySentTo.push_back(toAddr);
-		sendOnly(RR,toAddr);
+		sendOnly(RR,tPtr,toAddr);
 	}
 
 	/**
 	 * Try to send this to a given peer if it hasn't been sent to them already
 	 *
 	 * @param RR Runtime environment
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param toAddr Destination address
 	 * @return True if address is new and packet was sent to switch, false if duplicate
 	 */
-	inline bool sendIfNew(const RuntimeEnvironment *RR,const Address &toAddr)
+	inline bool sendIfNew(const RuntimeEnvironment *RR,void *tPtr,const Address &toAddr)
 	{
 		if (std::find(_alreadySentTo.begin(),_alreadySentTo.end(),toAddr) == _alreadySentTo.end()) {
-			sendAndLog(RR,toAddr);
+			sendAndLog(RR,tPtr,toAddr);
 			return true;
-		} else return false;
+		} else {
+			return false;
+		}
 	}
 
 private:
 	uint64_t _timestamp;
 	uint64_t _nwid;
+	MAC _macSrc;
+	MAC _macDest;
 	unsigned int _limit;
-	Packet _packetNoCom;
-	Packet _packetWithCom;
+	unsigned int _frameLen;
+	unsigned int _etherType;
+	Packet _packet;
 	std::vector<Address> _alreadySentTo;
-	bool _haveCom;
+	uint8_t _frameData[ZT_MAX_MTU];
 };
 
 } // namespace ZeroTier

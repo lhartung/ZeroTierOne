@@ -36,7 +36,6 @@ class SelfAwareness
 {
 public:
 	SelfAwareness(const RuntimeEnvironment *renv);
-	~SelfAwareness();
 
 	/**
 	 * Called when a trusted remote peer informs us of our external network address
@@ -48,7 +47,7 @@ public:
 	 * @param trusted True if this peer is trusted as an authority to inform us of external address changes
 	 * @param now Current time
 	 */
-	void iam(const Address &reporter,const InetAddress &receivedOnLocalAddress,const InetAddress &reporterPhysicalAddress,const InetAddress &myPhysicalAddress,bool trusted,uint64_t now);
+	void iam(void *tPtr,const Address &reporter,const InetAddress &receivedOnLocalAddress,const InetAddress &reporterPhysicalAddress,const InetAddress &myPhysicalAddress,bool trusted,uint64_t now);
 
 	/**
 	 * Clean up database periodically
@@ -82,9 +81,10 @@ private:
 	{
 		InetAddress mySurface;
 		uint64_t ts;
+		bool trusted;
 
-		PhySurfaceEntry() : mySurface(),ts(0) {}
-		PhySurfaceEntry(const InetAddress &a,const uint64_t t) : mySurface(a),ts(t) {}
+		PhySurfaceEntry() : mySurface(),ts(0),trusted(false) {}
+		PhySurfaceEntry(const InetAddress &a,const uint64_t t) : mySurface(a),ts(t),trusted(false) {}
 	};
 
 	const RuntimeEnvironment *RR;

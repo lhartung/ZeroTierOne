@@ -55,21 +55,22 @@ class Switch : NonCopyable
 {
 public:
 	Switch(const RuntimeEnvironment *renv);
-	~Switch();
 
 	/**
 	 * Called when a packet is received from the real network
 	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param localAddr Local interface address
 	 * @param fromAddr Internet IP address of origin
 	 * @param data Packet data
 	 * @param len Packet length
 	 */
-	void onRemotePacket(const InetAddress &localAddr,const InetAddress &fromAddr,const void *data,unsigned int len);
+	void onRemotePacket(void *tPtr,const InetAddress &localAddr,const InetAddress &fromAddr,const void *data,unsigned int len);
 
 	/**
 	 * Called when a packet comes from a local Ethernet tap
 	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param network Which network's TAP did this packet come from?
 	 * @param from Originating MAC address
 	 * @param to Destination MAC address
@@ -78,7 +79,7 @@ public:
 	 * @param data Ethernet payload
 	 * @param len Frame length
 	 */
-	void onLocalEthernet(const SharedPtr<Network> &network,const MAC &from,const MAC &to,unsigned int etherType,unsigned int vlanId,const void *data,unsigned int len);
+	void onLocalEthernet(void *tPtr,const SharedPtr<Network> &network,const MAC &from,const MAC &to,unsigned int etherType,unsigned int vlanId,const void *data,unsigned int len);
 
 	/**
 	 * Send a packet to a ZeroTier address (destination in packet)
@@ -92,51 +93,29 @@ public:
 	 * Needless to say, the packet's source must be this node. Otherwise it
 	 * won't be encrypted right. (This is not used for relaying.)
 	 *
-	 * The network ID should only be specified for frames and other actual
-	 * network traffic. Other traffic such as controller requests and regular
-	 * protocol messages should specify zero.
-	 *
-	 * @param packet Packet to send
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
+	 * @param packet Packet to send (buffer may be modified)
 	 * @param encrypt Encrypt packet payload? (always true except for HELLO)
-	 * @param nwid Related network ID or 0 if message is not in-network traffic
 	 */
-	void send(const Packet &packet,bool encrypt,uint64_t nwid);
-
-	/**
-	 * Send RENDEZVOUS to two peers to permit them to directly connect
-	 *
-	 * This only works if both peers are known, with known working direct
-	 * links to this peer. The best link for each peer is sent to the other.
-	 *
-	 * @param p1 One of two peers (order doesn't matter)
-	 * @param p2 Second of pair
-	 */
-	bool unite(const Address &p1,const Address &p2);
-
-	/**
-	 * Attempt NAT traversal to peer at a given physical address
-	 *
-	 * @param peer Peer to contact
-	 * @param localAddr Local interface address
-	 * @param atAddr Address of peer
-	 */
-	void rendezvous(const SharedPtr<Peer> &peer,const InetAddress &localAddr,const InetAddress &atAddr);
+	void send(void *tPtr,Packet &packet,bool encrypt);
 
 	/**
 	 * Request WHOIS on a given address
 	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param addr Address to look up
 	 */
-	void requestWhois(const Address &addr);
+	void requestWhois(void *tPtr,const Address &addr);
 
 	/**
 	 * Run any processes that are waiting for this peer's identity
 	 *
 	 * Called when we learn of a peer's identity from HELLO, OK(WHOIS), etc.
 	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param peer New peer
 	 */
-	void doAnythingWaitingForPeer(const SharedPtr<Peer> &peer);
+	void doAnythingWaitingForPeer(void *tPtr,const SharedPtr<Peer> &peer);
 
 	/**
 	 * Perform retries and other periodic timer tasks
@@ -144,14 +123,16 @@ public:
 	 * This can return a very long delay if there are no pending timer
 	 * tasks. The caller should cap this comparatively vs. other values.
 	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param now Current time
 	 * @return Number of milliseconds until doTimerTasks() should be run again
 	 */
-	unsigned long doTimerTasks(uint64_t now);
+	unsigned long doTimerTasks(void *tPtr,uint64_t now);
 
 private:
-	Address _sendWhoisRequest(const Address &addr,const Address *peersAlreadyConsulted,unsigned int numPeersAlreadyConsulted);
-	bool _trySend(const Packet &packet,bool encrypt,uint64_t nwid);
+	bool _shouldUnite(const uint64_t now,const Address &source,const Address &destination);
+	Address _sendWhoisRequest(void *tPtr,const Address &addr,const Address *peersAlreadyConsulted,unsigned int numPeersAlreadyConsulted);
+	bool _trySend(void *tPtr,Packet &packet,bool encrypt); // packet is modified if return is true
 
 	const RuntimeEnvironment *const RR;
 	uint64_t _lastBeaconResponse;
@@ -205,16 +186,14 @@ private:
 	struct TXQueueEntry
 	{
 		TXQueueEntry() {}
-		TXQueueEntry(Address d,uint64_t ct,const Packet &p,bool enc,uint64_t nw) :
+		TXQueueEntry(Address d,uint64_t ct,const Packet &p,bool enc) :
 			dest(d),
 			creationTime(ct),
-			nwid(nw),
 			packet(p),
 			encrypt(enc) {}
 
 		Address dest;
 		uint64_t creationTime;
-		uint64_t nwid;
 		Packet packet; // unencrypted/unMAC'd packet -- this is done at send time
 		bool encrypt;
 	};
@@ -241,26 +220,6 @@ private:
 	};
 	Hashtable< _LastUniteKey,uint64_t > _lastUniteAttempt; // key is always sorted in ascending order, for set-like behavior
 	Mutex _lastUniteAttempt_m;
-
-	// Active attempts to contact remote peers, including state of multi-phase NAT traversal
-	struct ContactQueueEntry
-	{
-		ContactQueueEntry() {}
-		ContactQueueEntry(const SharedPtr<Peer> &p,uint64_t ft,const InetAddress &laddr,const InetAddress &a) :
-			peer(p),
-			fireAtTime(ft),
-			inaddr(a),
-			localAddr(laddr),
-			strategyIteration(0) {}
-
-		SharedPtr<Peer> peer;
-		uint64_t fireAtTime;
-		InetAddress inaddr;
-		InetAddress localAddr;
-		unsigned int strategyIteration;
-	};
-	std::list<ContactQueueEntry> _contactQueue;
-	Mutex _contactQueue_m;
 };
 
 } // namespace ZeroTier
