@@ -367,7 +367,7 @@ std::string OSUtils::platformDefaultHomePath()
 	return std::string("/var/db/zerotier-one");
 #else
 	// Use /var/lib for Linux and other *nix
-    return std::string("/var/snap/zerotier-one/common");
+	return std::string("/var/snap/zerotier-one/common");
 #endif
 
 #endif
