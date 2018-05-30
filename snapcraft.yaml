@@ -47,10 +47,14 @@ parts:
       - libc++-dev
     make-parameters:
       - CXX=g++
+    override-build: |
+      # Patch the default home directory to work nicely with the snap filesystem.
+      sed "s:/var/lib/zerotier-one:/var/snap/zerotier-one/common:" -i osdep/OSUtils.cpp
+      snapcraftctl build
     filesets:
       binaries:
         - usr/sbin/zerotier-one
         - usr/sbin/zerotier-cli
         - usr/sbin/zerotier-idtool
-    snap:
+    prime:
       - $binaries
