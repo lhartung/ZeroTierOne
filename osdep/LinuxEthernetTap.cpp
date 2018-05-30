@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include <stdint.h>
@@ -40,6 +48,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <string>
 
 #include "../node/Constants.hpp"
 #include "../node/Utils.hpp"
@@ -54,6 +63,19 @@ static const ZeroTier::MulticastGroup _blindWildcardMulticastGroup(ZeroTier::MAC
 namespace ZeroTier {
 
 static Mutex __tapCreateLock;
+
+static const char _base32_chars[32] = { 'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','2','3','4','5','6','7' };
+static void _base32_5_to_8(const uint8_t *in,char *out)
+{
+	out[0] = _base32_chars[(in[0]) >> 3];
+	out[1] = _base32_chars[(in[0] & 0x07) << 2 | (in[1] & 0xc0) >> 6];
+	out[2] = _base32_chars[(in[1] & 0x3e) >> 1];
+	out[3] = _base32_chars[(in[1] & 0x01) << 4 | (in[2] & 0xf0) >> 4];
+	out[4] = _base32_chars[(in[2] & 0x0f) << 1 | (in[3] & 0x80) >> 7];
+	out[5] = _base32_chars[(in[3] & 0x7c) >> 2];
+	out[6] = _base32_chars[(in[3] & 0x03) << 3 | (in[4] & 0xe0) >> 5];
+	out[7] = _base32_chars[(in[4] & 0x1f)];
+}
 
 LinuxEthernetTap::LinuxEthernetTap(
 	const char *homePath,
@@ -75,12 +97,9 @@ LinuxEthernetTap::LinuxEthernetTap(
 	char procpath[128],nwids[32];
 	struct stat sbuf;
 
-	Utils::snprintf(nwids,sizeof(nwids),"%.16llx",nwid);
+	OSUtils::ztsnprintf(nwids,sizeof(nwids),"%.16llx",nwid);
 
 	Mutex::Lock _l(__tapCreateLock); // create only one tap at a time, globally
-
-	if (mtu > 2800)
-		throw std::runtime_error("max tap MTU is 2800");
 
 	_fd = ::open("/dev/net/tun",O_RDWR);
 	if (_fd <= 0) {
@@ -92,7 +111,7 @@ LinuxEthernetTap::LinuxEthernetTap(
 	struct ifreq ifr;
 	memset(&ifr,0,sizeof(ifr));
 
-	// Try to recall our last device name, or pick an unused one if that fails.
+	// Restore device names from legacy devicemap, but for new devices we use a base32-based canonical naming
 	std::map<std::string,std::string> globalDeviceMap;
 	FILE *devmapf = fopen((_homePath + ZT_PATH_SEPARATOR_S + "devicemap").c_str(),"r");
 	if (devmapf) {
@@ -115,20 +134,36 @@ LinuxEthernetTap::LinuxEthernetTap(
 	std::map<std::string,std::string>::const_iterator gdmEntry = globalDeviceMap.find(nwids);
 	if (gdmEntry != globalDeviceMap.end()) {
 		Utils::scopy(ifr.ifr_name,sizeof(ifr.ifr_name),gdmEntry->second.c_str());
-		Utils::snprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
+		OSUtils::ztsnprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
 		recalledDevice = (stat(procpath,&sbuf) != 0);
 	}
+
 	if (!recalledDevice) {
-		int devno = 0;
-		do {
 #ifdef __SYNOLOGY__
-			devno+=50; // Arbitrary number to prevent interface name conflicts
-			Utils::snprintf(ifr.ifr_name,sizeof(ifr.ifr_name),"eth%d",devno++);
-#else
-			Utils::snprintf(ifr.ifr_name,sizeof(ifr.ifr_name),"zt%d",devno++);
-#endif
-			Utils::snprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
+		int devno = 50;
+		do {
+			OSUtils::ztsnprintf(ifr.ifr_name,sizeof(ifr.ifr_name),"eth%d",devno++);
+			OSUtils::ztsnprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
 		} while (stat(procpath,&sbuf) == 0); // try zt#++ until we find one that does not exist
+#else
+		uint64_t trial = 0; // incremented in the very unlikely event of a name collision with another network
+		do {
+			const uint64_t nwid40 = (nwid ^ (nwid >> 24)) + trial++;
+			uint8_t tmp2[5];
+			char tmp3[11];
+			tmp2[0] = (uint8_t)((nwid40 >> 32) & 0xff);
+			tmp2[1] = (uint8_t)((nwid40 >> 24) & 0xff);
+			tmp2[2] = (uint8_t)((nwid40 >> 16) & 0xff);
+			tmp2[3] = (uint8_t)((nwid40 >> 8) & 0xff);
+			tmp2[4] = (uint8_t)(nwid40 & 0xff);
+			tmp3[0] = 'z';
+			tmp3[1] = 't';
+			_base32_5_to_8(tmp2,tmp3 + 2);
+			tmp3[10] = (char)0;
+			memcpy(ifr.ifr_name,tmp3,11);
+			OSUtils::ztsnprintf(procpath,sizeof(procpath),"/proc/sys/net/ipv4/conf/%s",ifr.ifr_name);
+		} while (stat(procpath,&sbuf) == 0);
+#endif
 	}
 
 	ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
@@ -191,6 +226,7 @@ LinuxEthernetTap::LinuxEthernetTap(
 
 	(void)::pipe(_shutdownSignalPipe);
 
+	/*
 	globalDeviceMap[nwids] = _dev;
 	devmapf = fopen((_homePath + ZT_PATH_SEPARATOR_S + "devicemap").c_str(),"w");
 	if (devmapf) {
@@ -201,6 +237,7 @@ LinuxEthernetTap::LinuxEthernetTap(
 		}
 		fclose(devmapf);
 	}
+	*/
 
 	_thread = Thread::start(this);
 }
@@ -230,7 +267,8 @@ static bool ___removeIp(const std::string &_dev,const InetAddress &ip)
 	if (cpid == 0) {
 		OSUtils::redirectUnixOutputs("/dev/null",(const char *)0);
 		setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin", 1);
-		::execlp("ip","ip","addr","del",ip.toString().c_str(),"dev",_dev.c_str(),(const char *)0);
+		char iptmp[128];
+		::execlp("ip","ip","addr","del",ip.toString(iptmp),"dev",_dev.c_str(),(const char *)0);
 		::_exit(-1);
 	} else {
 		int exitcode = -1;
@@ -251,7 +289,7 @@ bool LinuxEthernetTap::addIpSyn(std::vector<InetAddress> ips)
 	if (cpid == 0) {
 		OSUtils::redirectUnixOutputs("/dev/null",(const char *)0);
 		setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin", 1);
-		// We must know if there is at least (one) of each protocol version so we 
+		// We must know if there is at least (one) of each protocol version so we
 		// can properly enumerate address/netmask combinations in the ifcfg-dev file
 		for(int i=0; i<(int)ips.size(); i++) {
 			if (ips[i].isV4())
@@ -262,25 +300,28 @@ bool LinuxEthernetTap::addIpSyn(std::vector<InetAddress> ips)
 		// Assemble and write contents of ifcfg-dev file
 		for(int i=0; i<(int)ips.size(); i++) {
 			if (ips[i].isV4()) {
+				char iptmp[64],iptmp2[64];
 				std::string numstr4 = ip4_tot > 1 ? std::to_string(ip4) : "";
-				cfg_contents += "\nIPADDR"+numstr4+"="+ips[i].toIpString()
-					+ "\nNETMASK"+numstr4+"="+ips[i].netmask().toIpString()+"\n";
+				cfg_contents += "\nIPADDR"+numstr4+"="+ips[i].toIpString(iptmp)
+					+ "\nNETMASK"+numstr4+"="+ips[i].netmask().toIpString(iptmp2)+"\n";
 				ip4++;
 			}
 			else {
+				char iptmp[64],iptmp2[64];
 				std::string numstr6 = ip6_tot > 1 ? std::to_string(ip6) : "";
-				cfg_contents += "\nIPV6ADDR"+numstr6+"="+ips[i].toIpString()
-					+ "\nNETMASK"+numstr6+"="+ips[i].netmask().toIpString()+"\n";
+				cfg_contents += "\nIPV6ADDR"+numstr6+"="+ips[i].toIpString(iptmp)
+					+ "\nNETMASK"+numstr6+"="+ips[i].netmask().toIpString(iptmp2)+"\n";
 				ip6++;
 			}
 		}
 		OSUtils::writeFile(filepath.c_str(), cfg_contents.c_str(), cfg_contents.length());
 		// Finaly, add IPs
 		for(int i=0; i<(int)ips.size(); i++){
+			char iptmp[128],iptmp2[128];
 			if (ips[i].isV4())
-				::execlp("ip","ip","addr","add",ips[i].toString().c_str(),"broadcast",ips[i].broadcast().toIpString().c_str(),"dev",_dev.c_str(),(const char *)0);
+				::execlp("ip","ip","addr","add",ips[i].toString(iptmp),"broadcast",ips[i].broadcast().toIpString(iptmp2),"dev",_dev.c_str(),(const char *)0);
 			else
-				::execlp("ip","ip","addr","add",ips[i].toString().c_str(),"dev",_dev.c_str(),(const char *)0);			
+				::execlp("ip","ip","addr","add",ips[i].toString(iptmp),"dev",_dev.c_str(),(const char *)0);
 		}
 		::_exit(-1);
 	} else if (cpid > 0) {
@@ -311,10 +352,11 @@ bool LinuxEthernetTap::addIp(const InetAddress &ip)
 	if (cpid == 0) {
 		OSUtils::redirectUnixOutputs("/dev/null",(const char *)0);
 		setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin", 1);
+		char iptmp[128],iptmp2[128];
 		if (ip.isV4()) {
-			::execlp("ip","ip","addr","add",ip.toString().c_str(),"broadcast",ip.broadcast().toIpString().c_str(),"dev",_dev.c_str(),(const char *)0);
+			::execlp("ip","ip","addr","add",ip.toString(iptmp),"broadcast",ip.broadcast().toIpString(iptmp2),"dev",_dev.c_str(),(const char *)0);
 		} else {
-			::execlp("ip","ip","addr","add",ip.toString().c_str(),"dev",_dev.c_str(),(const char *)0);
+			::execlp("ip","ip","addr","add",ip.toString(iptmp),"dev",_dev.c_str(),(const char *)0);
 		}
 		::_exit(-1);
 	} else if (cpid > 0) {
@@ -378,7 +420,7 @@ std::vector<InetAddress> LinuxEthernetTap::ips() const
 
 void LinuxEthernetTap::put(const MAC &from,const MAC &to,unsigned int etherType,const void *data,unsigned int len)
 {
-	char putBuf[8194];
+	char putBuf[ZT_MAX_MTU + 64];
 	if ((_fd > 0)&&(len <= _mtu)&&(_enabled)) {
 		to.copyTo(putBuf,6);
 		from.copyTo(putBuf + 6,6);
@@ -447,13 +489,28 @@ void LinuxEthernetTap::scanMulticastGroups(std::vector<MulticastGroup> &added,st
 	_multicastGroups.swap(newGroups);
 }
 
+void LinuxEthernetTap::setMtu(unsigned int mtu)
+{
+	if (_mtu != mtu) {
+		_mtu = mtu;
+		int sock = socket(AF_INET,SOCK_DGRAM,0);
+		if (sock > 0) {
+			struct ifreq ifr;
+			memset(&ifr,0,sizeof(ifr));
+			ifr.ifr_ifru.ifru_mtu = (int)mtu;
+			ioctl(sock,SIOCSIFMTU,(void *)&ifr);
+			close(sock);
+		}
+	}
+}
+
 void LinuxEthernetTap::threadMain()
 	throw()
 {
 	fd_set readfds,nullfds;
 	MAC to,from;
 	int n,nfds,r;
-	char getBuf[8194];
+	char getBuf[ZT_MAX_MTU + 64];
 
 	Thread::sleep(500);
 

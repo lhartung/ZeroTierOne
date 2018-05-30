@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_INCOMINGPACKET_HPP
@@ -69,7 +77,7 @@ public:
 	 * @param now Current time
 	 * @throws std::out_of_range Range error processing packet
 	 */
-	IncomingPacket(const void *data,unsigned int len,const SharedPtr<Path> &path,uint64_t now) :
+	IncomingPacket(const void *data,unsigned int len,const SharedPtr<Path> &path,int64_t now) :
 		Packet(data,len),
 		_receiveTime(now),
 		_path(path)
@@ -85,7 +93,7 @@ public:
 	 * @param now Current time
 	 * @throws std::out_of_range Range error processing packet
 	 */
-	inline void init(const void *data,unsigned int len,const SharedPtr<Path> &path,uint64_t now)
+	inline void init(const void *data,unsigned int len,const SharedPtr<Path> &path,int64_t now)
 	{
 		copyFrom(data,len);
 		_receiveTime = now;
@@ -110,7 +118,7 @@ public:
 	/**
 	 * @return Time of packet receipt / start of decode
 	 */
-	inline uint64_t receiveTime() const throw() { return _receiveTime; }
+	inline uint64_t receiveTime() const { return _receiveTime; }
 
 private:
 	// These are called internally to handle packet contents once it has
@@ -130,9 +138,8 @@ private:
 	bool _doMULTICAST_GATHER(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer);
 	bool _doMULTICAST_FRAME(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer);
 	bool _doPUSH_DIRECT_PATHS(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer);
-	bool _doCIRCUIT_TEST(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer);
-	bool _doCIRCUIT_TEST_REPORT(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer);
 	bool _doUSER_MESSAGE(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer);
+	bool _doREMOTE_TRACE(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer);
 
 	void _sendErrorNeedCredentials(const RuntimeEnvironment *RR,void *tPtr,const SharedPtr<Peer> &peer,const uint64_t nwid);
 

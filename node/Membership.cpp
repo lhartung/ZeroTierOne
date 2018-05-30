@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include <algorithm>
@@ -25,6 +33,7 @@
 #include "Switch.hpp"
 #include "Packet.hpp"
 #include "Node.hpp"
+#include "Trace.hpp"
 
 #define ZT_CREDENTIAL_PUSH_EVERY (ZT_NETWORK_AUTOCONF_DELAY / 3)
 
@@ -42,7 +51,7 @@ Membership::Membership() :
 	resetPushState();
 }
 
-void Membership::pushCredentials(const RuntimeEnvironment *RR,void *tPtr,const uint64_t now,const Address &peerAddress,const NetworkConfig &nconf,int localCapabilityIndex,const bool force)
+void Membership::pushCredentials(const RuntimeEnvironment *RR,void *tPtr,const int64_t now,const Address &peerAddress,const NetworkConfig &nconf,int localCapabilityIndex,const bool force)
 {
 	bool sendCom = ( (nconf.com) && ( ((now - _lastPushedCom) >= ZT_CREDENTIAL_PUSH_EVERY) || (force) ) );
 
@@ -118,28 +127,25 @@ void Membership::pushCredentials(const RuntimeEnvironment *RR,void *tPtr,const u
 
 Membership::AddCredentialResult Membership::addCredential(const RuntimeEnvironment *RR,void *tPtr,const NetworkConfig &nconf,const CertificateOfMembership &com)
 {
-	const uint64_t newts = com.timestamp();
+	const int64_t newts = com.timestamp();
 	if (newts <= _comRevocationThreshold) {
-		TRACE("addCredential(CertificateOfMembership) for %s on %.16llx REJECTED (revoked)",com.issuedTo().toString().c_str(),com.networkId());
+		RR->t->credentialRejected(tPtr,com,"revoked");
 		return ADD_REJECTED;
 	}
 
-	const uint64_t oldts = _com.timestamp();
+	const int64_t oldts = _com.timestamp();
 	if (newts < oldts) {
-		TRACE("addCredential(CertificateOfMembership) for %s on %.16llx REJECTED (older than current)",com.issuedTo().toString().c_str(),com.networkId());
+		RR->t->credentialRejected(tPtr,com,"old");
 		return ADD_REJECTED;
 	}
-	if ((newts == oldts)&&(_com == com)) {
-		TRACE("addCredential(CertificateOfMembership) for %s on %.16llx ACCEPTED (redundant)",com.issuedTo().toString().c_str(),com.networkId());
+	if ((newts == oldts)&&(_com == com))
 		return ADD_ACCEPTED_REDUNDANT;
-	}
 
 	switch(com.verify(RR,tPtr)) {
 		default:
-			TRACE("addCredential(CertificateOfMembership) for %s on %.16llx REJECTED (invalid signature or object)",com.issuedTo().toString().c_str(),com.networkId());
+			RR->t->credentialRejected(tPtr,com,"invalid");
 			return ADD_REJECTED;
 		case 0:
-			TRACE("addCredential(CertificateOfMembership) for %s on %.16llx ACCEPTED (new)",com.issuedTo().toString().c_str(),com.networkId());
 			_com = com;
 			return ADD_ACCEPTED_NEW;
 		case 1:
@@ -149,32 +155,29 @@ Membership::AddCredentialResult Membership::addCredential(const RuntimeEnvironme
 
 // Template out addCredential() for many cred types to avoid copypasta
 template<typename C>
-static Membership::AddCredentialResult _addCredImpl(Hashtable<uint32_t,C> &remoteCreds,const Hashtable<uint64_t,uint64_t> &revocations,const RuntimeEnvironment *RR,void *tPtr,const NetworkConfig &nconf,const C &cred)
+static Membership::AddCredentialResult _addCredImpl(Hashtable<uint32_t,C> &remoteCreds,const Hashtable<uint64_t,int64_t> &revocations,const RuntimeEnvironment *RR,void *tPtr,const NetworkConfig &nconf,const C &cred)
 {
 	C *rc = remoteCreds.get(cred.id());
 	if (rc) {
 		if (rc->timestamp() > cred.timestamp()) {
-			TRACE("addCredential(type==%d) for %s on %.16llx REJECTED (older than credential we have)",(int)C::credentialType(),cred.issuedTo().toString().c_str(),cred.networkId());
+			RR->t->credentialRejected(tPtr,cred,"old");
 			return Membership::ADD_REJECTED;
 		}
-		if (*rc == cred) {
-			//TRACE("addCredential(type==%d) for %s on %.16llx ACCEPTED (redundant)",(int)C::credentialType(),cred.issuedTo().toString().c_str(),cred.networkId());
+		if (*rc == cred)
 			return Membership::ADD_ACCEPTED_REDUNDANT;
-		}
 	}
 
-	const uint64_t *const rt = revocations.get(Membership::credentialKey(C::credentialType(),cred.id()));
+	const int64_t *const rt = revocations.get(Membership::credentialKey(C::credentialType(),cred.id()));
 	if ((rt)&&(*rt >= cred.timestamp())) {
-		TRACE("addCredential(type==%d) for %s on %.16llx REJECTED (timestamp below revocation threshold)",(int)C::credentialType(),cred.issuedTo().toString().c_str(),cred.networkId());
+		RR->t->credentialRejected(tPtr,cred,"revoked");
 		return Membership::ADD_REJECTED;
 	}
 
 	switch(cred.verify(RR,tPtr)) {
 		default:
-			TRACE("addCredential(type==%d) for %s on %.16llx REJECTED (invalid)",(int)C::credentialType(),cred.issuedTo().toString().c_str(),cred.networkId());
+			RR->t->credentialRejected(tPtr,cred,"invalid");
 			return Membership::ADD_REJECTED;
 		case 0:
-			TRACE("addCredential(type==%d) for %s on %.16llx ACCEPTED (new)",(int)C::credentialType(),cred.issuedTo().toString().c_str(),cred.networkId());
 			if (!rc)
 				rc = &(remoteCreds[cred.id()]);
 			*rc = cred;
@@ -190,9 +193,10 @@ Membership::AddCredentialResult Membership::addCredential(const RuntimeEnvironme
 
 Membership::AddCredentialResult Membership::addCredential(const RuntimeEnvironment *RR,void *tPtr,const NetworkConfig &nconf,const Revocation &rev)
 {
-	uint64_t *rt;
+	int64_t *rt;
 	switch(rev.verify(RR,tPtr)) {
 		default:
+			RR->t->credentialRejected(tPtr,rev,"invalid");
 			return ADD_REJECTED;
 		case 0: {
 			const Credential::Type ct = rev.type();
@@ -209,10 +213,12 @@ Membership::AddCredentialResult Membership::addCredential(const RuntimeEnvironme
 					rt = &(_revocations[credentialKey(ct,rev.credentialId())]);
 					if (*rt < rev.threshold()) {
 						*rt = rev.threshold();
+						_comRevocationThreshold = rev.threshold();
 						return ADD_ACCEPTED_NEW;
 					}
 					return ADD_ACCEPTED_REDUNDANT;
 				default:
+					RR->t->credentialRejected(tPtr,rev,"invalid");
 					return ADD_REJECTED;
 			}
 		}
@@ -221,7 +227,7 @@ Membership::AddCredentialResult Membership::addCredential(const RuntimeEnvironme
 	}
 }
 
-void Membership::clean(const uint64_t now,const NetworkConfig &nconf)
+void Membership::clean(const int64_t now,const NetworkConfig &nconf)
 {
 	_cleanCredImpl<Tag>(nconf,_remoteTags);
 	_cleanCredImpl<Capability>(nconf,_remoteCaps);

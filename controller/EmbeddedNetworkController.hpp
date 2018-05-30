@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2015  ZeroTier, Inc.
+ * Copyright (C) 2011-2018  ZeroTier, Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,11 +26,12 @@
 #include <vector>
 #include <set>
 #include <list>
+#include <thread>
+#include <unordered_map>
+#include <atomic>
 
 #include "../node/Constants.hpp"
-
 #include "../node/NetworkController.hpp"
-#include "../node/Mutex.hpp"
 #include "../node/Utils.hpp"
 #include "../node/Address.hpp"
 #include "../node/InetAddress.hpp"
@@ -41,13 +42,11 @@
 
 #include "../ext/json/json.hpp"
 
-#include "JSONDB.hpp"
-
-// Number of background threads to start -- not actually started until needed
-#define ZT_EMBEDDEDNETWORKCONTROLLER_BACKGROUND_THREAD_COUNT 4
-
-// TTL for circuit tests
-#define ZT_EMBEDDEDNETWORKCONTROLLER_CIRCUIT_TEST_EXPIRATION 120000
+#include "DB.hpp"
+#include "FileDB.hpp"
+#ifdef ZT_CONTROLLER_USE_RETHINKDB
+#include "RethinkDB.hpp"
+#endif
 
 namespace ZeroTier {
 
@@ -58,7 +57,7 @@ class EmbeddedNetworkController : public NetworkController
 public:
 	/**
 	 * @param node Parent node
-	 * @param dbPath Path to store data
+	 * @param dbPath Database path (file path or database credentials)
 	 */
 	EmbeddedNetworkController(Node *node,const char *dbPath);
 	virtual ~EmbeddedNetworkController();
@@ -94,10 +93,17 @@ public:
 		std::string &responseBody,
 		std::string &responseContentType);
 
-	void threadMain()
-		throw();
+	void handleRemoteTrace(const ZT_RemoteTrace &rt);
+
+	// Called on update via POST or by JSONDB on external update of network or network member records
+	void onNetworkUpdate(const uint64_t networkId);
+	void onNetworkMemberUpdate(const uint64_t networkId,const uint64_t memberId);
+	void onNetworkMemberDeauthorize(const uint64_t networkId,const uint64_t memberId);
 
 private:
+	void _request(uint64_t nwid,const InetAddress &fromAddr,uint64_t requestPacketId,const Identity &identity,const Dictionary<ZT_NETWORKCONFIG_METADATA_DICT_CAPACITY> &metaData);
+	void _startThreads();
+
 	struct _RQEntry
 	{
 		uint64_t nwid;
@@ -105,104 +111,47 @@ private:
 		InetAddress fromAddr;
 		Identity identity;
 		Dictionary<ZT_NETWORKCONFIG_METADATA_DICT_CAPACITY> metaData;
+		enum {
+			RQENTRY_TYPE_REQUEST = 0
+		} type;
 	};
-
-	// Gathers a bunch of statistics about members of a network, IP assignments, etc. that we need in various places
-	struct _NetworkMemberInfo
+	struct _MemberStatusKey
 	{
-		_NetworkMemberInfo() : authorizedMemberCount(0),activeMemberCount(0),totalMemberCount(0),mostRecentDeauthTime(0) {}
-		std::set<Address> activeBridges;
-		std::set<InetAddress> allocatedIps;
-		unsigned long authorizedMemberCount;
-		unsigned long activeMemberCount;
-		unsigned long totalMemberCount;
-		uint64_t mostRecentDeauthTime;
-		uint64_t nmiTimestamp; // time this NMI structure was computed
+		_MemberStatusKey() : networkId(0),nodeId(0) {}
+		_MemberStatusKey(const uint64_t nwid,const uint64_t nid) : networkId(nwid),nodeId(nid) {}
+		uint64_t networkId;
+		uint64_t nodeId;
+		inline bool operator==(const _MemberStatusKey &k) const { return ((k.networkId == networkId)&&(k.nodeId == nodeId)); }
 	};
-
-	static void _circuitTestCallback(ZT_Node *node,ZT_CircuitTest *test,const ZT_CircuitTestReport *report);
-	void _request(uint64_t nwid,const InetAddress &fromAddr,uint64_t requestPacketId,const Identity &identity,const Dictionary<ZT_NETWORKCONFIG_METADATA_DICT_CAPACITY> &metaData);
-	void _getNetworkMemberInfo(uint64_t now,uint64_t nwid,_NetworkMemberInfo &nmi);
-	inline void _clearNetworkMemberInfoCache(const uint64_t nwid) { Mutex::Lock _l(_nmiCache_m); _nmiCache.erase(nwid); }
-	void _pushMemberUpdate(uint64_t now,uint64_t nwid,const nlohmann::json &member);
-
-	// These init objects with default and static/informational fields
-	inline void _initMember(nlohmann::json &member)
+	struct _MemberStatus
 	{
-		if (!member.count("authorized")) member["authorized"] = false;
-		if (!member.count("authHistory")) member["authHistory"] = nlohmann::json::array();
- 		if (!member.count("ipAssignments")) member["ipAssignments"] = nlohmann::json::array();
-		if (!member.count("recentLog")) member["recentLog"] = nlohmann::json::array();
-		if (!member.count("activeBridge")) member["activeBridge"] = false;
-		if (!member.count("tags")) member["tags"] = nlohmann::json::array();
-		if (!member.count("capabilities")) member["capabilities"] = nlohmann::json::array();
-		if (!member.count("creationTime")) member["creationTime"] = OSUtils::now();
-		if (!member.count("noAutoAssignIps")) member["noAutoAssignIps"] = false;
-		if (!member.count("revision")) member["revision"] = 0ULL;
-		if (!member.count("lastDeauthorizedTime")) member["lastDeauthorizedTime"] = 0ULL;
-		if (!member.count("lastAuthorizedTime")) member["lastAuthorizedTime"] = 0ULL;
-		member["objtype"] = "member";
-	}
-	inline void _initNetwork(nlohmann::json &network)
+		_MemberStatus() : lastRequestTime(0),vMajor(-1),vMinor(-1),vRev(-1),vProto(-1) {}
+		uint64_t lastRequestTime;
+		int vMajor,vMinor,vRev,vProto;
+		Dictionary<ZT_NETWORKCONFIG_METADATA_DICT_CAPACITY> lastRequestMetaData;
+		Identity identity;
+		inline bool online(const int64_t now) const { return ((now - lastRequestTime) < (ZT_NETWORK_AUTOCONF_DELAY * 2)); }
+	};
+	struct _MemberStatusHash
 	{
-		if (!network.count("private")) network["private"] = true;
-		if (!network.count("creationTime")) network["creationTime"] = OSUtils::now();
-		if (!network.count("name")) network["name"] = "";
-		if (!network.count("multicastLimit")) network["multicastLimit"] = (uint64_t)32;
-		if (!network.count("enableBroadcast")) network["enableBroadcast"] = true;
-		if (!network.count("v4AssignMode")) network["v4AssignMode"] = {{"zt",false}};
-		if (!network.count("v6AssignMode")) network["v6AssignMode"] = {{"rfc4193",false},{"zt",false},{"6plane",false}};
-		if (!network.count("authTokens")) network["authTokens"] = nlohmann::json::array();
-		if (!network.count("capabilities")) network["capabilities"] = nlohmann::json::array();
-		if (!network.count("tags")) network["tags"] = nlohmann::json::array();
-		if (!network.count("routes")) network["routes"] = nlohmann::json::array();
-		if (!network.count("ipAssignmentPools")) network["ipAssignmentPools"] = nlohmann::json::array();
-		if (!network.count("rules")) {
-			// If unspecified, rules are set to allow anything and behave like a flat L2 segment
-			network["rules"] = {{
-				{ "not",false },
-				{ "or", false },
-				{ "type","ACTION_ACCEPT" }
-			}};
+		inline std::size_t operator()(const _MemberStatusKey &networkIdNodeId) const
+		{
+			return (std::size_t)(networkIdNodeId.networkId + networkIdNodeId.nodeId);
 		}
-		network["objtype"] = "network";
-	}
-	inline void _addNetworkNonPersistedFields(nlohmann::json &network,uint64_t now,const _NetworkMemberInfo &nmi)
-	{
-		network["clock"] = now;
-		network["authorizedMemberCount"] = nmi.authorizedMemberCount;
-		network["activeMemberCount"] = nmi.activeMemberCount;
-		network["totalMemberCount"] = nmi.totalMemberCount;
-	}
-	inline void _addMemberNonPersistedFields(nlohmann::json &member,uint64_t now)
-	{
-		member["clock"] = now;
-	}
+	};
 
-	const uint64_t _startTime;
-
-	BlockingQueue<_RQEntry *> _queue;
-	Thread _threads[ZT_EMBEDDEDNETWORKCONTROLLER_BACKGROUND_THREAD_COUNT];
-	bool _threadsStarted;
-	Mutex _threads_m;
-
-	std::map<uint64_t,_NetworkMemberInfo> _nmiCache;
-	Mutex _nmiCache_m;
-
-	JSONDB _db;
-	Mutex _db_m;
-
+	const int64_t _startTime;
 	Node *const _node;
 	std::string _path;
-
-	NetworkController::Sender *_sender;
 	Identity _signingId;
-
-	std::list< ZT_CircuitTest > _tests;
-	Mutex _tests_m;
-
-	std::map< std::pair<uint64_t,uint64_t>,uint64_t > _lastRequestTime; // last request time by <address,networkId>
-	Mutex _lastRequestTime_m;
+	std::string _signingIdAddressString;
+	NetworkController::Sender *_sender;
+	std::unique_ptr<DB> _db;
+	BlockingQueue< _RQEntry * > _queue;
+	std::vector<std::thread> _threads;
+	std::mutex _threads_l;
+	std::unordered_map< _MemberStatusKey,_MemberStatus,_MemberStatusHash > _memberStatus;
+	std::mutex _memberStatus_l;
 };
 
 } // namespace ZeroTier

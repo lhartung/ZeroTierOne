@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include <stdint.h>
@@ -147,53 +155,22 @@ namespace {
   A library is provided to take care of it, see lz4frame.h.
 */
 
-#define LZ4LIB_API
-
-/*========== Version =========== */
 #define LZ4_VERSION_MAJOR    1    /* for breaking interface changes  */
 #define LZ4_VERSION_MINOR    7    /* for new (non-breaking) interface capabilities */
 #define LZ4_VERSION_RELEASE  5    /* for tweaks, bug-fixes, or development */
-
 #define LZ4_VERSION_NUMBER (LZ4_VERSION_MAJOR *100*100 + LZ4_VERSION_MINOR *100 + LZ4_VERSION_RELEASE)
-
 #define LZ4_LIB_VERSION LZ4_VERSION_MAJOR.LZ4_VERSION_MINOR.LZ4_VERSION_RELEASE
 #define LZ4_QUOTE(str) #str
 #define LZ4_EXPAND_AND_QUOTE(str) LZ4_QUOTE(str)
 #define LZ4_VERSION_STRING LZ4_EXPAND_AND_QUOTE(LZ4_LIB_VERSION)
-
-/*!
- * LZ4_MEMORY_USAGE :
- * Memory usage formula : N->2^N Bytes (examples : 10 -> 1KB; 12 -> 4KB ; 16 -> 64KB; 20 -> 1MB; etc.)
- * Increasing memory usage improves compression ratio
- * Reduced memory usage can improve speed, due to cache effect
- * Default value is 14, for 16KB, which nicely fits into Intel x86 L1 cache
- */
 #define LZ4_MEMORY_USAGE 14
-
 #define LZ4_MAX_INPUT_SIZE        0x7E000000   /* 2 113 929 216 bytes */
 #define LZ4_COMPRESSBOUND(isize)  ((unsigned)(isize) > (unsigned)LZ4_MAX_INPUT_SIZE ? 0 : (isize) + ((isize)/255) + 16)
 
-/*-*********************************************
-*  Streaming Compression Functions
-***********************************************/
 typedef union LZ4_stream_u LZ4_stream_t;   /* incomplete type (defined later) */
 
-/*! LZ4_resetStream() :
- *  An LZ4_stream_t structure can be allocated once and re-used multiple times.
- *  Use this function to init an allocated `LZ4_stream_t` structure and start a new compression.
- */
-LZ4LIB_API void LZ4_resetStream (LZ4_stream_t* streamPtr);
+static inline void LZ4_resetStream (LZ4_stream_t* streamPtr);
 
-/*^**********************************************
- * !!!!!!   STATIC LINKING ONLY   !!!!!!
- ***********************************************/
-/*-************************************
- *  Private definitions
- **************************************
- * Do not use these definitions.
- * They are exposed to allow static allocation of `LZ4_stream_t` and `LZ4_streamDecode_t`.
- * Using these definitions will expose code to API and/or ABI break in future versions of the library.
- **************************************/
 #define LZ4_HASHLOG   (LZ4_MEMORY_USAGE-2)
 #define LZ4_HASHTABLESIZE (1 << LZ4_MEMORY_USAGE)
 #define LZ4_HASH_SIZE_U32 (1 << LZ4_HASHLOG)       /* required as macro for static allocation */
@@ -214,14 +191,6 @@ typedef struct {
 	size_t prefixSize;
 } LZ4_streamDecode_t_internal;
 
-/*!
- * LZ4_stream_t :
- * information structure to track an LZ4 stream.
- * init this structure before first use.
- * note : only use in association with static linking !
- *        this definition is not API/ABI safe,
- *        and may change in a future version !
- */
 #define LZ4_STREAMSIZE_U64 ((1 << (LZ4_MEMORY_USAGE-3)) + 4)
 #define LZ4_STREAMSIZE     (LZ4_STREAMSIZE_U64 * sizeof(unsigned long long))
 union LZ4_stream_u {
@@ -229,14 +198,6 @@ union LZ4_stream_u {
 	LZ4_stream_t_internal internal_donotuse;
 } ;  /* previously typedef'd to LZ4_stream_t */
 
-/*!
- * LZ4_streamDecode_t :
- * information structure to track an LZ4 stream during decompression.
- * init this structure  using LZ4_setStreamDecode (or memset()) before first use
- * note : only use in association with static linking !
- *        this definition is not API/ABI safe,
- *        and may change in a future version !
- */
 #define LZ4_STREAMDECODESIZE_U64  4
 #define LZ4_STREAMDECODESIZE     (LZ4_STREAMDECODESIZE_U64 * sizeof(unsigned long long))
 union LZ4_streamDecode_u {
@@ -245,33 +206,7 @@ union LZ4_streamDecode_u {
 } ;   /* previously typedef'd to LZ4_streamDecode_t */
 
 #ifndef HEAPMODE
-#  define HEAPMODE 0
-#endif
-
-//#define ACCELERATION_DEFAULT 1
-
-/* LZ4_FORCE_MEMORY_ACCESS
- * By default, access to unaligned memory is controlled by `memcpy()`, which is safe and portable.
- * Unfortunately, on some target/compiler combinations, the generated assembly is sub-optimal.
- * The below switch allow to select different access method for improved performance.
- * Method 0 (default) : use `memcpy()`. Safe and portable.
- * Method 1 : `__packed` statement. It depends on compiler extension (ie, not portable).
- *            This method is safe if your compiler supports it, and *generally* as fast or faster than `memcpy`.
- * Method 2 : direct access. This method is portable but violate C standard.
- *            It can generate buggy code on targets which generate assembly depending on alignment.
- *            But in some circumstances, it's the only known way to get the most performance (ie GCC + ARMv6)
- * See https://fastcompression.blogspot.fr/2015/08/accessing-unaligned-memory.html for details.
- * Prefer these methods in priority order (0 > 1 > 2)
- */
-#if 0
-#ifndef LZ4_FORCE_MEMORY_ACCESS   /* can be defined externally, on command line for example */
-#  if defined(__GNUC__) && ( defined(__ARM_ARCH_6__) || defined(__ARM_ARCH_6J__) || defined(__ARM_ARCH_6K__) || defined(__ARM_ARCH_6Z__) || defined(__ARM_ARCH_6ZK__) || defined(__ARM_ARCH_6T2__) )
-#    define LZ4_FORCE_MEMORY_ACCESS 2
-#  elif defined(__INTEL_COMPILER) || \
-  (defined(__GNUC__) && ( defined(__ARM_ARCH_7__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7R__) || defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7S__) ))
-#    define LZ4_FORCE_MEMORY_ACCESS 1
-#  endif
-#endif
+#define HEAPMODE 0
 #endif
 
 #ifdef ZT_NO_TYPE_PUNNING
@@ -280,59 +215,18 @@ union LZ4_streamDecode_u {
 #define LZ4_FORCE_MEMORY_ACCESS 2
 #endif
 
-/*
- * LZ4_FORCE_SW_BITCOUNT
- * Define this parameter if your target system or compiler does not support hardware bit count
- */
 #if defined(_MSC_VER) && defined(_WIN32_WCE)   /* Visual Studio for Windows CE does not support Hardware bit count */
-#  define LZ4_FORCE_SW_BITCOUNT
-#endif
-
-/*-************************************
-*  Compiler Options
-**************************************/
-#if 0
-#ifdef _MSC_VER    /* Visual Studio */
-#  define FORCE_INLINE static __forceinline
-#  include <intrin.h>
-#  pragma warning(disable : 4127)        /* disable: C4127: conditional expression is constant */
-#  pragma warning(disable : 4293)        /* disable: C4293: too large shift (32-bits) */
-#else
-#  if defined(__GNUC__) || defined(__clang__)
-#    define FORCE_INLINE static inline __attribute__((always_inline))
-#  elif defined(__cplusplus) || (defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
-#    define FORCE_INLINE static inline
-#  else
-#    define FORCE_INLINE static
-#  endif
-#endif  /* _MSC_VER */
+#define LZ4_FORCE_SW_BITCOUNT
 #endif
 
 #ifndef FORCE_INLINE
 #define FORCE_INLINE static inline
 #endif
 
-#if (defined(__GNUC__) && (__GNUC__ >= 3)) || (defined(__INTEL_COMPILER) && (__INTEL_COMPILER >= 800)) || defined(__clang__)
-#  define expect(expr,value)    (__builtin_expect ((expr),(value)) )
-#else
-#  define expect(expr,value)    (expr)
-#endif
-
-#define likely(expr)     expect((expr) != 0, 1)
-#define unlikely(expr)   expect((expr) != 0, 0)
-
-/*-************************************
-*  Memory routines
-**************************************/
-//#include <stdlib.h>   /* malloc, calloc, free */
 #define ALLOCATOR(n,s) calloc(n,s)
 #define FREEMEM        free
-//#include <string.h>   /* memset, memcpy */
 #define MEM_INIT       memset
 
-/*-************************************
-*  Basic Types
-**************************************/
 typedef  uint8_t BYTE;
 typedef uint16_t U16;
 typedef uint32_t U32;
@@ -341,65 +235,46 @@ typedef uint64_t U64;
 typedef uintptr_t uptrval;
 typedef uintptr_t reg_t;
 
-/*-************************************
-*  Reading and writing into memory
-**************************************/
-static unsigned LZ4_isLittleEndian(void)
+static inline unsigned LZ4_isLittleEndian(void)
 {
 	const union { U32 u; BYTE c[4]; } one = { 1 };   /* don't use static : performance detrimental */
 	return one.c[0];
 }
 
 #if defined(LZ4_FORCE_MEMORY_ACCESS) && (LZ4_FORCE_MEMORY_ACCESS==2)
-/* lie to the compiler about data alignment; use with caution */
-
 static U16 LZ4_read16(const void* memPtr) { return *(const U16*) memPtr; }
 static U32 LZ4_read32(const void* memPtr) { return *(const U32*) memPtr; }
 static reg_t LZ4_read_ARCH(const void* memPtr) { return *(const reg_t*) memPtr; }
-
 static void LZ4_write16(void* memPtr, U16 value) { *(U16*)memPtr = value; }
 static void LZ4_write32(void* memPtr, U32 value) { *(U32*)memPtr = value; }
-
 #elif defined(LZ4_FORCE_MEMORY_ACCESS) && (LZ4_FORCE_MEMORY_ACCESS==1)
-
-/* __pack instructions are safer, but compiler specific, hence potentially problematic for some compilers */
-/* currently only defined for gcc and icc */
 typedef union { U16 u16; U32 u32; reg_t uArch; } __attribute__((packed)) unalign;
-
 static U16 LZ4_read16(const void* ptr) { return ((const unalign*)ptr)->u16; }
 static U32 LZ4_read32(const void* ptr) { return ((const unalign*)ptr)->u32; }
 static reg_t LZ4_read_ARCH(const void* ptr) { return ((const unalign*)ptr)->uArch; }
-
 static void LZ4_write16(void* memPtr, U16 value) { ((unalign*)memPtr)->u16 = value; }
 static void LZ4_write32(void* memPtr, U32 value) { ((unalign*)memPtr)->u32 = value; }
-
 #else  /* safe and portable access through memcpy() */
-
 static inline U16 LZ4_read16(const void* memPtr)
 {
-	U16 val; memcpy(&val, memPtr, sizeof(val)); return val;
+	U16 val; ZT_FAST_MEMCPY(&val, memPtr, sizeof(val)); return val;
 }
-
 static inline U32 LZ4_read32(const void* memPtr)
 {
-	U32 val; memcpy(&val, memPtr, sizeof(val)); return val;
+	U32 val; ZT_FAST_MEMCPY(&val, memPtr, sizeof(val)); return val;
 }
-
 static inline reg_t LZ4_read_ARCH(const void* memPtr)
 {
-	reg_t val; memcpy(&val, memPtr, sizeof(val)); return val;
+	reg_t val; ZT_FAST_MEMCPY(&val, memPtr, sizeof(val)); return val;
 }
-
 static inline void LZ4_write16(void* memPtr, U16 value)
 {
-	memcpy(memPtr, &value, sizeof(value));
+	ZT_FAST_MEMCPY(memPtr, &value, sizeof(value));
 }
-
 static inline void LZ4_write32(void* memPtr, U32 value)
 {
-	memcpy(memPtr, &value, sizeof(value));
+	ZT_FAST_MEMCPY(memPtr, &value, sizeof(value));
 }
-
 #endif /* LZ4_FORCE_MEMORY_ACCESS */
 
 static inline U16 LZ4_readLE16(const void* memPtr)
@@ -425,22 +300,17 @@ static inline void LZ4_writeLE16(void* memPtr, U16 value)
 
 static inline void LZ4_copy8(void* dst, const void* src)
 {
-	memcpy(dst,src,8);
+	ZT_FAST_MEMCPY(dst,src,8);
 }
 
-/* customized variant of memcpy, which can overwrite up to 8 bytes beyond dstEnd */
 static inline void LZ4_wildCopy(void* dstPtr, const void* srcPtr, void* dstEnd)
 {
 	BYTE* d = (BYTE*)dstPtr;
 	const BYTE* s = (const BYTE*)srcPtr;
 	BYTE* const e = (BYTE*)dstEnd;
-
 	do { LZ4_copy8(d,s); d+=8; s+=8; } while (d<e);
 }
 
-/*-************************************
-*  Common Constants
-**************************************/
 #define MINMATCH 4
 
 #define WILDCOPYLENGTH 8
@@ -460,14 +330,8 @@ static const int LZ4_minLength = (MFLIMIT+1);
 #define RUN_BITS (8-ML_BITS)
 #define RUN_MASK ((1U<<RUN_BITS)-1)
 
-/*-************************************
-*  Common Utils
-**************************************/
 #define LZ4_STATIC_ASSERT(c)    { enum { LZ4_static_assert = 1/(int)(!!(c)) }; }   /* use only *after* variable declarations */
 
-/*-************************************
-*  Common functions
-**************************************/
 static inline unsigned LZ4_NbCommonBytes (register reg_t val)
 {
 	if (LZ4_isLittleEndian()) {
@@ -544,15 +408,9 @@ static inline unsigned LZ4_count(const BYTE* pIn, const BYTE* pMatch, const BYTE
 	return (unsigned)(pIn - pStart);
 }
 
-/*-************************************
-*  Local Constants
-**************************************/
 static const int LZ4_64Klimit = ((64 KB) + (MFLIMIT-1));
 static const U32 LZ4_skipTrigger = 6;  /* Increase this value ==> compression run slower on incompressible data */
 
-/*-************************************
-*  Local Structures and types
-**************************************/
 typedef enum { notLimited = 0, limitedOutput = 1 } limitedOutput_directive;
 typedef enum { byPtr, byU32, byU16 } tableType_t;
 
@@ -562,17 +420,8 @@ typedef enum { noDictIssue = 0, dictSmall } dictIssue_directive;
 typedef enum { endOnOutputSize = 0, endOnInputSize = 1 } endCondition_directive;
 typedef enum { full = 0, partial = 1 } earlyEnd_directive;
 
-/*-************************************
-*  Local Utils
-**************************************/
-//int LZ4_versionNumber (void) { return LZ4_VERSION_NUMBER; }
-//const char* LZ4_versionString(void) { return LZ4_VERSION_STRING; }
-int LZ4_compressBound(int isize)  { return LZ4_COMPRESSBOUND(isize); }
-//int LZ4_sizeofState() { return LZ4_STREAMSIZE; }
+static inline int LZ4_compressBound(int isize)  { return LZ4_COMPRESSBOUND(isize); }
 
-/*-******************************
-*  Compression functions
-********************************/
 static inline U32 LZ4_hash4(U32 sequence, tableType_t const tableType)
 {
 	if (tableType == byU16)
@@ -627,8 +476,6 @@ FORCE_INLINE const BYTE* LZ4_getPosition(const BYTE* p, void* tableBase, tableTy
 	return LZ4_getPositionOnHash(h, tableBase, tableType, srcBase);
 }
 
-/** LZ4_compress_generic() :
-	inlined, to ensure branches are decided at compilation time */
 FORCE_INLINE int LZ4_compress_generic(
 	             LZ4_stream_t_internal* const cctx,
 	             const char* const source,
@@ -820,7 +667,7 @@ _last_literals:
 	    } else {
 	        *op++ = (BYTE)(lastRun<<ML_BITS);
 	    }
-	    memcpy(op, anchor, lastRun);
+	    ZT_FAST_MEMCPY(op, anchor, lastRun);
 	    op += lastRun;
 	}
 
@@ -864,20 +711,11 @@ static inline int LZ4_compress_fast(const char* source, char* dest, int inputSiz
 	return result;
 }
 
-void LZ4_resetStream (LZ4_stream_t* LZ4_stream)
+static inline void LZ4_resetStream (LZ4_stream_t* LZ4_stream)
 {
 	MEM_INIT(LZ4_stream, 0, sizeof(LZ4_stream_t));
 }
 
-/*-*****************************
-*  Decompression functions
-*******************************/
-/*! LZ4_decompress_generic() :
- *  This generic decompression function cover all use cases.
- *  It shall be instantiated several times, using different sets of directives
- *  Note that it is important this generic function is really inlined,
- *  in order to remove useless branches during compilation optimization.
- */
 FORCE_INLINE int LZ4_decompress_generic(
 	             const char* const source,
 	             char* const dest,
@@ -946,7 +784,7 @@ FORCE_INLINE int LZ4_decompress_generic(
 	            if ((!endOnInput) && (cpy != oend)) goto _output_error;       /* Error : block decoding must stop exactly there */
 	            if ((endOnInput) && ((ip+length != iend) || (cpy > oend))) goto _output_error;   /* Error : input must be consumed */
 	        }
-	        memcpy(op, ip, length);
+	        ZT_FAST_MEMCPY(op, ip, length);
 	        ip += length;
 	        op += length;
 	        break;     /* Necessarily EOF, due to parsing restrictions */
@@ -985,14 +823,14 @@ FORCE_INLINE int LZ4_decompress_generic(
 	            /* match encompass external dictionary and current block */
 	            size_t const copySize = (size_t)(lowPrefix-match);
 	            size_t const restSize = length - copySize;
-	            memcpy(op, dictEnd - copySize, copySize);
+	            ZT_FAST_MEMCPY(op, dictEnd - copySize, copySize);
 	            op += copySize;
 	            if (restSize > (size_t)(op-lowPrefix)) {  /* overlap copy */
 	                BYTE* const endOfMatch = op + restSize;
 	                const BYTE* copyFrom = lowPrefix;
 	                while (op < endOfMatch) *op++ = *copyFrom++;
 	            } else {
-	                memcpy(op, lowPrefix, restSize);
+	                ZT_FAST_MEMCPY(op, lowPrefix, restSize);
 	                op += restSize;
 	        }   }
 	        continue;
@@ -1007,7 +845,7 @@ FORCE_INLINE int LZ4_decompress_generic(
 	        op[2] = match[2];
 	        op[3] = match[3];
 	        match += dec32table[offset];
-	        memcpy(op+4, match, 4);
+	        ZT_FAST_MEMCPY(op+4, match, 4);
 	        match -= dec64;
 	    } else { LZ4_copy8(op, match); match+=8; }
 	    op += 8;
@@ -1051,64 +889,16 @@ static inline int LZ4_decompress_safe(const char* source, char* dest, int compre
 
 const unsigned char Packet::ZERO_KEY[32] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 
-#ifdef ZT_TRACE
-
-const char *Packet::verbString(Verb v)
-{
-	switch(v) {
-		case VERB_NOP: return "NOP";
-		case VERB_HELLO: return "HELLO";
-		case VERB_ERROR: return "ERROR";
-		case VERB_OK: return "OK";
-		case VERB_WHOIS: return "WHOIS";
-		case VERB_RENDEZVOUS: return "RENDEZVOUS";
-		case VERB_FRAME: return "FRAME";
-		case VERB_EXT_FRAME: return "EXT_FRAME";
-		case VERB_ECHO: return "ECHO";
-		case VERB_MULTICAST_LIKE: return "MULTICAST_LIKE";
-		case VERB_NETWORK_CREDENTIALS: return "NETWORK_CREDENTIALS";
-		case VERB_NETWORK_CONFIG_REQUEST: return "NETWORK_CONFIG_REQUEST";
-		case VERB_NETWORK_CONFIG: return "NETWORK_CONFIG";
-		case VERB_MULTICAST_GATHER: return "MULTICAST_GATHER";
-		case VERB_MULTICAST_FRAME: return "MULTICAST_FRAME";
-		case VERB_PUSH_DIRECT_PATHS: return "PUSH_DIRECT_PATHS";
-		case VERB_CIRCUIT_TEST: return "CIRCUIT_TEST";
-		case VERB_CIRCUIT_TEST_REPORT: return "CIRCUIT_TEST_REPORT";
-		case VERB_USER_MESSAGE: return "USER_MESSAGE";
-	}
-	return "(unknown)";
-}
-
-const char *Packet::errorString(ErrorCode e)
-{
-	switch(e) {
-		case ERROR_NONE: return "NONE";
-		case ERROR_INVALID_REQUEST: return "INVALID_REQUEST";
-		case ERROR_BAD_PROTOCOL_VERSION: return "BAD_PROTOCOL_VERSION";
-		case ERROR_OBJ_NOT_FOUND: return "OBJECT_NOT_FOUND";
-		case ERROR_IDENTITY_COLLISION: return "IDENTITY_COLLISION";
-		case ERROR_UNSUPPORTED_OPERATION: return "UNSUPPORTED_OPERATION";
-		case ERROR_NEED_MEMBERSHIP_CERTIFICATE: return "NEED_MEMBERSHIP_CERTIFICATE";
-		case ERROR_NETWORK_ACCESS_DENIED_: return "NETWORK_ACCESS_DENIED";
-		case ERROR_UNWANTED_MULTICAST: return "UNWANTED_MULTICAST";
-	}
-	return "(unknown)";
-}
-
-#endif // ZT_TRACE
-
-void Packet::armor(const void *key,bool encryptPayload,unsigned int counter)
+void Packet::armor(const void *key,bool encryptPayload)
 {
 	uint8_t mangledKey[32];
 	uint8_t *const data = reinterpret_cast<uint8_t *>(unsafeData());
-
-	// Mask least significant 3 bits of packet ID with counter to embed packet send counter for QoS use
-	data[7] = (data[7] & 0xf8) | (uint8_t)(counter & 0x07);
 
 	// Set flag now, since it affects key mangle function
 	setCipher(encryptPayload ? ZT_PROTO_CIPHER_SUITE__C25519_POLY1305_SALSA2012 : ZT_PROTO_CIPHER_SUITE__C25519_POLY1305_NONE);
 
 	_salsa20MangleKey((const unsigned char *)key,mangledKey);
+
 	if (ZT_HAS_FAST_CRYPTO()) {
 		const unsigned int encryptLen = (encryptPayload) ? (size() - ZT_PACKET_IDX_VERB) : 0;
 		uint64_t keyStream[(ZT_PROTO_MAX_PACKET_LENGTH + 64 + 8) / 8];
@@ -1131,7 +921,7 @@ void Packet::armor(const void *key,bool encryptPayload,unsigned int counter)
 			s20.crypt12(payload,payload,payloadLen);
 		uint64_t mac[2];
 		Poly1305::compute(mac,payload,payloadLen,macKey);
-		memcpy(data + ZT_PACKET_IDX_MAC,mac,8);
+		ZT_FAST_MEMCPY(data + ZT_PACKET_IDX_MAC,mac,8);
 	}
 }
 
@@ -1203,7 +993,7 @@ bool Packet::compress()
 		if ((cl > 0)&&(cl < pl)) {
 			data[ZT_PACKET_IDX_VERB] |= (char)ZT_PROTO_VERB_FLAG_COMPRESSED;
 			setSize((unsigned int)cl + ZT_PACKET_IDX_PAYLOAD);
-			memcpy(data + ZT_PACKET_IDX_PAYLOAD,buf,cl);
+			ZT_FAST_MEMCPY(data + ZT_PACKET_IDX_PAYLOAD,buf,cl);
 			return true;
 		}
 	}
@@ -1223,7 +1013,7 @@ bool Packet::uncompress()
 			int ucl = LZ4_decompress_safe((const char *)data + ZT_PACKET_IDX_PAYLOAD,buf,compLen,sizeof(buf));
 			if ((ucl > 0)&&(ucl <= (int)(capacity() - ZT_PACKET_IDX_PAYLOAD))) {
 				setSize((unsigned int)ucl + ZT_PACKET_IDX_PAYLOAD);
-				memcpy(data + ZT_PACKET_IDX_PAYLOAD,buf,ucl);
+				ZT_FAST_MEMCPY(data + ZT_PACKET_IDX_PAYLOAD,buf,ucl);
 			} else {
 				return false;
 			}

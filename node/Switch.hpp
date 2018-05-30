@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_N_SWITCH_HPP
@@ -27,12 +35,10 @@
 #include "Constants.hpp"
 #include "Mutex.hpp"
 #include "MAC.hpp"
-#include "NonCopyable.hpp"
 #include "Packet.hpp"
 #include "Utils.hpp"
 #include "InetAddress.hpp"
 #include "Topology.hpp"
-#include "Array.hpp"
 #include "Network.hpp"
 #include "SharedPtr.hpp"
 #include "IncomingPacket.hpp"
@@ -51,7 +57,7 @@ class Peer;
  * packets from tap devices, and this sends them where they need to go and
  * wraps/unwraps accordingly. It also handles queues and timeouts and such.
  */
-class Switch : NonCopyable
+class Switch
 {
 public:
 	Switch(const RuntimeEnvironment *renv);
@@ -60,12 +66,12 @@ public:
 	 * Called when a packet is received from the real network
 	 *
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
-	 * @param localAddr Local interface address
+	 * @param localSocket Local I/O socket as supplied by external code
 	 * @param fromAddr Internet IP address of origin
 	 * @param data Packet data
 	 * @param len Packet length
 	 */
-	void onRemotePacket(void *tPtr,const InetAddress &localAddr,const InetAddress &fromAddr,const void *data,unsigned int len);
+	void onRemotePacket(void *tPtr,const int64_t localSocket,const InetAddress &fromAddr,const void *data,unsigned int len);
 
 	/**
 	 * Called when a packet comes from a local Ethernet tap
@@ -103,9 +109,10 @@ public:
 	 * Request WHOIS on a given address
 	 *
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
+	 * @param now Current time
 	 * @param addr Address to look up
 	 */
-	void requestWhois(void *tPtr,const Address &addr);
+	void requestWhois(void *tPtr,const int64_t now,const Address &addr);
 
 	/**
 	 * Run any processes that are waiting for this peer's identity
@@ -127,59 +134,52 @@ public:
 	 * @param now Current time
 	 * @return Number of milliseconds until doTimerTasks() should be run again
 	 */
-	unsigned long doTimerTasks(void *tPtr,uint64_t now);
+	unsigned long doTimerTasks(void *tPtr,int64_t now);
 
 private:
-	bool _shouldUnite(const uint64_t now,const Address &source,const Address &destination);
-	Address _sendWhoisRequest(void *tPtr,const Address &addr,const Address *peersAlreadyConsulted,unsigned int numPeersAlreadyConsulted);
+	bool _shouldUnite(const int64_t now,const Address &source,const Address &destination);
 	bool _trySend(void *tPtr,Packet &packet,bool encrypt); // packet is modified if return is true
 
 	const RuntimeEnvironment *const RR;
-	uint64_t _lastBeaconResponse;
+	int64_t _lastBeaconResponse;
+	volatile int64_t _lastCheckedQueues;
 
-	// Outstanding WHOIS requests and how many retries they've undergone
-	struct WhoisRequest
-	{
-		WhoisRequest() : lastSent(0),retries(0) {}
-		uint64_t lastSent;
-		Address peersConsulted[ZT_MAX_WHOIS_RETRIES]; // by retry
-		unsigned int retries; // 0..ZT_MAX_WHOIS_RETRIES
-	};
-	Hashtable< Address,WhoisRequest > _outstandingWhoisRequests;
-	Mutex _outstandingWhoisRequests_m;
+	// Time we last sent a WHOIS request for each address
+	Hashtable< Address,int64_t > _lastSentWhoisRequest;
+	Mutex _lastSentWhoisRequest_m;
 
 	// Packets waiting for WHOIS replies or other decode info or missing fragments
 	struct RXQueueEntry
 	{
 		RXQueueEntry() : timestamp(0) {}
-		uint64_t timestamp; // 0 if entry is not in use
-		uint64_t packetId;
+		volatile int64_t timestamp; // 0 if entry is not in use
+		volatile uint64_t packetId;
 		IncomingPacket frag0; // head of packet
 		Packet::Fragment frags[ZT_MAX_PACKET_FRAGMENTS - 1]; // later fragments (if any)
 		unsigned int totalFragments; // 0 if only frag0 received, waiting for frags
 		uint32_t haveFragments; // bit mask, LSB to MSB
-		bool complete; // if true, packet is complete
+		volatile bool complete; // if true, packet is complete
 	};
 	RXQueueEntry _rxQueue[ZT_RX_QUEUE_SIZE];
-	Mutex _rxQueue_m;
+	AtomicCounter _rxQueuePtr;
 
-	/* Returns the matching or oldest entry. Caller must check timestamp and
-	 * packet ID to determine which. */
-	inline RXQueueEntry *_findRXQueueEntry(uint64_t now,uint64_t packetId)
+	// Returns matching or next available RX queue entry
+	inline RXQueueEntry *_findRXQueueEntry(uint64_t packetId)
 	{
-		RXQueueEntry *rq;
-		RXQueueEntry *oldest = &(_rxQueue[ZT_RX_QUEUE_SIZE - 1]);
-		unsigned long i = ZT_RX_QUEUE_SIZE;
-		while (i) {
-			rq = &(_rxQueue[--i]);
+		const unsigned int current = static_cast<unsigned int>(_rxQueuePtr.load());
+		for(unsigned int k=1;k<=ZT_RX_QUEUE_SIZE;++k) {
+			RXQueueEntry *rq = &(_rxQueue[(current - k) % ZT_RX_QUEUE_SIZE]);
 			if ((rq->packetId == packetId)&&(rq->timestamp))
 				return rq;
-			if ((now - rq->timestamp) >= ZT_RX_QUEUE_EXPIRE)
-				rq->timestamp = 0;
-			if (rq->timestamp < oldest->timestamp)
-				oldest = rq;
 		}
-		return oldest;
+		++_rxQueuePtr;
+		return &(_rxQueue[static_cast<unsigned int>(current) % ZT_RX_QUEUE_SIZE]);
+	}
+
+	// Returns current entry in rx queue ring buffer and increments ring pointer
+	inline RXQueueEntry *_nextRXQueueEntry()
+	{
+		return &(_rxQueue[static_cast<unsigned int>((++_rxQueuePtr) - 1) % ZT_RX_QUEUE_SIZE]);
 	}
 
 	// ZeroTier-layer TX queue entry
@@ -214,8 +214,8 @@ private:
 				y = a2.toInt();
 			}
 		}
-		inline unsigned long hashCode() const throw() { return ((unsigned long)x ^ (unsigned long)y); }
-		inline bool operator==(const _LastUniteKey &k) const throw() { return ((x == k.x)&&(y == k.y)); }
+		inline unsigned long hashCode() const { return ((unsigned long)x ^ (unsigned long)y); }
+		inline bool operator==(const _LastUniteKey &k) const { return ((x == k.x)&&(y == k.y)); }
 		uint64_t x,y;
 	};
 	Hashtable< _LastUniteKey,uint64_t > _lastUniteAttempt; // key is always sorted in ascending order, for set-like behavior

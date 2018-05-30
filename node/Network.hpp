@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_NETWORK_HPP
@@ -30,7 +38,6 @@
 #include <stdexcept>
 
 #include "Constants.hpp"
-#include "NonCopyable.hpp"
 #include "Hashtable.hpp"
 #include "Address.hpp"
 #include "Mutex.hpp"
@@ -55,7 +62,7 @@ class Peer;
 /**
  * A virtual LAN
  */
-class Network : NonCopyable
+class Network
 {
 	friend class SharedPtr<Network>;
 
@@ -68,7 +75,7 @@ public:
 	/**
 	 * Compute primary controller device ID from network ID
 	 */
-	static inline Address controllerFor(uint64_t nwid) throw() { return Address(nwid >> 24); }
+	static inline Address controllerFor(uint64_t nwid) { return Address(nwid >> 24); }
 
 	/**
 	 * Construct a new network
@@ -80,8 +87,9 @@ public:
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param nwid Network ID
 	 * @param uptr Arbitrary pointer used by externally-facing API (for user use)
+	 * @param nconf Network config, if known
 	 */
-	Network(const RuntimeEnvironment *renv,void *tPtr,uint64_t nwid,void *uptr);
+	Network(const RuntimeEnvironment *renv,void *tPtr,uint64_t nwid,void *uptr,const NetworkConfig *nconf);
 
 	~Network();
 
@@ -89,7 +97,7 @@ public:
 	inline Address controller() const { return Address(_id >> 24); }
 	inline bool multicastEnabled() const { return (_config.multicastLimit > 0); }
 	inline bool hasConfig() const { return (_config); }
-	inline uint64_t lastConfigUpdate() const throw() { return _lastConfigUpdate; }
+	inline uint64_t lastConfigUpdate() const { return _lastConfigUpdate; }
 	inline ZT_VirtualNetworkStatus status() const { Mutex::Lock _l(_lock); return _status(); }
 	inline const NetworkConfig &config() const { return _config; }
 	inline const MAC &mac() const { return _mac; }
@@ -240,6 +248,19 @@ public:
 	bool gate(void *tPtr,const SharedPtr<Peer> &peer);
 
 	/**
+	 * Check whether a given peer has recently had an association with this network
+	 *
+	 * This checks whether a peer has communicated with us recently about this
+	 * network and has possessed a valid certificate of membership. This may return
+	 * true even if the peer has been offline for a while or no longer has a valid
+	 * certificate of membership but had one recently.
+	 *
+	 * @param addr Peer address
+	 * @return True if peer has recently associated
+	 */
+	bool recentlyAssociatedWith(const Address &addr);
+
+	/**
 	 * Do periodic cleanup and housekeeping tasks
 	 */
 	void clean();
@@ -283,7 +304,7 @@ public:
 	 * @param mg Multicast group
 	 * @param now Current time
 	 */
-	void learnBridgedMulticastGroup(void *tPtr,const MulticastGroup &mg,uint64_t now);
+	void learnBridgedMulticastGroup(void *tPtr,const MulticastGroup &mg,int64_t now);
 
 	/**
 	 * Validate a credential and learn it if it passes certificate and other checks
@@ -335,7 +356,7 @@ public:
 	 * @param to Destination peer address
 	 * @param now Current time
 	 */
-	inline void pushCredentialsNow(void *tPtr,const Address &to,const uint64_t now)
+	inline void pushCredentialsNow(void *tPtr,const Address &to,const int64_t now)
 	{
 		Mutex::Lock _l(_lock);
 		_membership(to).pushCredentials(RR,tPtr,now,to,_config,-1,true);

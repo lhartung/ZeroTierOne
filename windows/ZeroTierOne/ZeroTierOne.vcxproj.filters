@@ -168,9 +168,6 @@
     <ClCompile Include="..\..\node\Path.cpp">
       <Filter>Source Files\node</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\node\Cluster.cpp">
-      <Filter>Source Files\node</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\ext\miniupnpc\connecthostport.c">
       <Filter>Source Files\ext\miniupnpc</Filter>
     </ClCompile>
@@ -240,9 +237,6 @@
     <ClCompile Include="..\..\controller\EmbeddedNetworkController.cpp">
       <Filter>Source Files\controller</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\controller\JSONDB.cpp">
-      <Filter>Source Files\controller</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\service\SoftwareUpdater.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
@@ -254,6 +248,18 @@
     </ClCompile>
     <ClCompile Include="..\..\selftest.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\node\Trace.cpp">
+      <Filter>Source Files\node</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\controller\DB.cpp">
+      <Filter>Source Files\controller</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\controller\FileDB.cpp">
+      <Filter>Source Files\controller</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\controller\RethinkDB.cpp">
+      <Filter>Source Files\controller</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -287,13 +293,7 @@
     <ClInclude Include="..\..\node\Address.hpp">
       <Filter>Header Files\node</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\node\Array.hpp">
-      <Filter>Header Files\node</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\node\AtomicCounter.hpp">
-      <Filter>Header Files\node</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\node\BandwidthAccount.hpp">
       <Filter>Header Files\node</Filter>
     </ClInclude>
     <ClInclude Include="..\..\node\Buffer.hpp">
@@ -303,9 +303,6 @@
       <Filter>Header Files\node</Filter>
     </ClInclude>
     <ClInclude Include="..\..\node\CertificateOfMembership.hpp">
-      <Filter>Header Files\node</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\node\CMWC4096.hpp">
       <Filter>Header Files\node</Filter>
     </ClInclude>
     <ClInclude Include="..\..\node\Constants.hpp">
@@ -345,9 +342,6 @@
       <Filter>Header Files\node</Filter>
     </ClInclude>
     <ClInclude Include="..\..\node\Node.hpp">
-      <Filter>Header Files\node</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\node\NonCopyable.hpp">
       <Filter>Header Files\node</Filter>
     </ClInclude>
     <ClInclude Include="..\..\node\OutboundMulticast.hpp">
@@ -401,16 +395,7 @@
     <ClInclude Include="ZeroTierOneService.h">
       <Filter>Header Files\windows\ZeroTierOne</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\node\BinarySemaphore.hpp">
-      <Filter>Header Files\node</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\node\Cluster.hpp">
-      <Filter>Header Files\node</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\node\Hashtable.hpp">
-      <Filter>Header Files\node</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\node\DeferredPackets.hpp">
       <Filter>Header Files\node</Filter>
     </ClInclude>
     <ClInclude Include="..\..\node\World.hpp">
@@ -500,7 +485,16 @@
     <ClInclude Include="..\..\controller\EmbeddedNetworkController.hpp">
       <Filter>Header Files\controller</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\controller\JSONDB.hpp">
+    <ClInclude Include="..\..\node\Trace.hpp">
+      <Filter>Header Files\node</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\controller\DB.hpp">
+      <Filter>Header Files\controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\controller\FileDB.hpp">
+      <Filter>Header Files\controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\controller\RethinkDB.hpp">
       <Filter>Header Files\controller</Filter>
     </ClInclude>
   </ItemGroup>

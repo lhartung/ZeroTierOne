@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include "CertificateOfMembership.hpp"
@@ -21,6 +29,7 @@
 #include "Topology.hpp"
 #include "Switch.hpp"
 #include "Network.hpp"
+#include "Node.hpp"
 
 namespace ZeroTier {
 
@@ -49,6 +58,7 @@ void CertificateOfMembership::setQualifier(uint64_t id,uint64_t value,uint64_t m
 
 std::string CertificateOfMembership::toString() const
 {
+	char tmp[ZT_NETWORK_COM_MAX_QUALIFIERS * 32];
 	std::string s;
 
 	s.append("1:"); // COM_UINT64_ED25519
@@ -61,7 +71,7 @@ std::string CertificateOfMembership::toString() const
 			buf[ptr++] = Utils::hton(_qualifiers[i].value);
 			buf[ptr++] = Utils::hton(_qualifiers[i].maxDelta);
 		}
-		s.append(Utils::hex(buf,ptr * sizeof(uint64_t)));
+		s.append(Utils::hex(buf,ptr * sizeof(uint64_t),tmp));
 		delete [] buf;
 	} catch ( ... ) {
 		delete [] buf;
@@ -70,11 +80,11 @@ std::string CertificateOfMembership::toString() const
 
 	s.push_back(':');
 
-	s.append(_signedBy.toString());
+	s.append(_signedBy.toString(tmp));
 
 	if (_signedBy) {
 		s.push_back(':');
-		s.append(Utils::hex(_signature.data,(unsigned int)_signature.size()));
+		s.append(Utils::hex(_signature.data,ZT_C25519_SIGNATURE_LEN,tmp));
 	}
 
 	return s;
@@ -84,7 +94,7 @@ void CertificateOfMembership::fromString(const char *s)
 {
 	_qualifierCount = 0;
 	_signedBy.zero();
-	memset(_signature.data,0,_signature.size());
+	memset(_signature.data,0,ZT_C25519_SIGNATURE_LEN);
 
 	if (!*s)
 		return;
@@ -135,7 +145,7 @@ void CertificateOfMembership::fromString(const char *s)
 				colonAt = 0;
 				while ((s[colonAt])&&(s[colonAt] != ':')) ++colonAt;
 				if (colonAt) {
-					if (Utils::unhex(s,colonAt,_signature.data,(unsigned int)_signature.size()) != _signature.size())
+					if (Utils::unhex(s,colonAt,_signature.data,ZT_C25519_SIGNATURE_LEN) != ZT_C25519_SIGNATURE_LEN)
 						_signedBy.zero();
 				} else {
 					_signedBy.zero();
@@ -214,7 +224,7 @@ int CertificateOfMembership::verify(const RuntimeEnvironment *RR,void *tPtr) con
 
 	const Identity id(RR->topology->getIdentity(tPtr,_signedBy));
 	if (!id) {
-		RR->sw->requestWhois(tPtr,_signedBy);
+		RR->sw->requestWhois(tPtr,RR->node->now(),_signedBy);
 		return 1;
 	}
 

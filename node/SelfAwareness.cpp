@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include <stdio.h>
@@ -31,6 +39,7 @@
 #include "Packet.hpp"
 #include "Peer.hpp"
 #include "Switch.hpp"
+#include "Trace.hpp"
 
 // Entry timeout -- make it fairly long since this is just to prevent stale buildup
 #define ZT_SELFAWARENESS_ENTRY_TIMEOUT 600000
@@ -40,7 +49,7 @@ namespace ZeroTier {
 class _ResetWithinScope
 {
 public:
-	_ResetWithinScope(void *tPtr,uint64_t now,int inetAddressFamily,InetAddress::IpScope scope) :
+	_ResetWithinScope(void *tPtr,int64_t now,int inetAddressFamily,InetAddress::IpScope scope) :
 		_now(now),
 		_tPtr(tPtr),
 		_family(inetAddressFamily),
@@ -61,7 +70,7 @@ SelfAwareness::SelfAwareness(const RuntimeEnvironment *renv) :
 {
 }
 
-void SelfAwareness::iam(void *tPtr,const Address &reporter,const InetAddress &receivedOnLocalAddress,const InetAddress &reporterPhysicalAddress,const InetAddress &myPhysicalAddress,bool trusted,uint64_t now)
+void SelfAwareness::iam(void *tPtr,const Address &reporter,const int64_t receivedOnLocalSocket,const InetAddress &reporterPhysicalAddress,const InetAddress &myPhysicalAddress,bool trusted,int64_t now)
 {
 	const InetAddress::IpScope scope = myPhysicalAddress.ipScope();
 
@@ -69,11 +78,11 @@ void SelfAwareness::iam(void *tPtr,const Address &reporter,const InetAddress &re
 		return;
 
 	Mutex::Lock _l(_phy_m);
-	PhySurfaceEntry &entry = _phy[PhySurfaceKey(reporter,receivedOnLocalAddress,reporterPhysicalAddress,scope)];
+	PhySurfaceEntry &entry = _phy[PhySurfaceKey(reporter,receivedOnLocalSocket,reporterPhysicalAddress,scope)];
 
 	if ( (trusted) && ((now - entry.ts) < ZT_SELFAWARENESS_ENTRY_TIMEOUT) && (!entry.mySurface.ipsEqual(myPhysicalAddress)) ) {
 		// Changes to external surface reported by trusted peers causes path reset in this scope
-		TRACE("physical address %s for scope %u as seen from %s(%s) differs from %s, resetting paths in scope",myPhysicalAddress.toString().c_str(),(unsigned int)scope,reporter.toString().c_str(),reporterPhysicalAddress.toString().c_str(),entry.mySurface.toString().c_str());
+		RR->t->resettingPathsInScope(tPtr,reporter,reporterPhysicalAddress,myPhysicalAddress,scope);
 
 		entry.mySurface = myPhysicalAddress;
 		entry.ts = now;
@@ -103,7 +112,7 @@ void SelfAwareness::iam(void *tPtr,const Address &reporter,const InetAddress &re
 	}
 }
 
-void SelfAwareness::clean(uint64_t now)
+void SelfAwareness::clean(int64_t now)
 {
 	Mutex::Lock _l(_phy_m);
 	Hashtable< PhySurfaceKey,PhySurfaceEntry >::Iterator i(_phy);
@@ -138,13 +147,14 @@ std::vector<InetAddress> SelfAwareness::getSymmetricNatPredictions()
 	 * read or modify traffic, but they could gather meta-data for forensics
 	 * purpsoes or use this as a DOS attack vector. */
 
-	std::map< uint32_t,std::pair<uint64_t,unsigned int> > maxPortByIp;
+	std::map< uint32_t,unsigned int > maxPortByIp;
 	InetAddress theOneTrueSurface;
-	bool symmetric = false;
 	{
 		Mutex::Lock _l(_phy_m);
 
-		{	// First get IPs from only trusted peers, and perform basic NAT type characterization
+		// First check to see if this is a symmetric NAT and enumerate external IPs learned from trusted peers
+		bool symmetric = false;
+		{
 			Hashtable< PhySurfaceKey,PhySurfaceEntry >::Iterator i(_phy);
 			PhySurfaceKey *k = (PhySurfaceKey *)0;
 			PhySurfaceEntry *e = (PhySurfaceEntry *)0;
@@ -154,42 +164,47 @@ std::vector<InetAddress> SelfAwareness::getSymmetricNatPredictions()
 						theOneTrueSurface = e->mySurface;
 					else if (theOneTrueSurface != e->mySurface)
 						symmetric = true;
-					maxPortByIp[reinterpret_cast<const struct sockaddr_in *>(&(e->mySurface))->sin_addr.s_addr] = std::pair<uint64_t,unsigned int>(e->ts,e->mySurface.port());
+					maxPortByIp[reinterpret_cast<const struct sockaddr_in *>(&(e->mySurface))->sin_addr.s_addr] = e->mySurface.port();
 				}
 			}
 		}
+		if (!symmetric)
+			return std::vector<InetAddress>();
 
-		{	// Then find max port per IP from a trusted peer
+		{	// Then find the highest issued port per IP
 			Hashtable< PhySurfaceKey,PhySurfaceEntry >::Iterator i(_phy);
 			PhySurfaceKey *k = (PhySurfaceKey *)0;
 			PhySurfaceEntry *e = (PhySurfaceEntry *)0;
 			while (i.next(k,e)) {
 				if ((e->mySurface.ss_family == AF_INET)&&(e->mySurface.ipScope() == InetAddress::IP_SCOPE_GLOBAL)) {
-					std::map< uint32_t,std::pair<uint64_t,unsigned int> >::iterator mp(maxPortByIp.find(reinterpret_cast<const struct sockaddr_in *>(&(e->mySurface))->sin_addr.s_addr));
-					if ((mp != maxPortByIp.end())&&(mp->second.first < e->ts)) {
-						mp->second.first = e->ts;
-						mp->second.second = e->mySurface.port();
-					}
+					const unsigned int port = e->mySurface.port();
+					std::map< uint32_t,unsigned int >::iterator mp(maxPortByIp.find(reinterpret_cast<const struct sockaddr_in *>(&(e->mySurface))->sin_addr.s_addr));
+					if ((mp != maxPortByIp.end())&&(mp->second < port))
+						mp->second = port;
 				}
 			}
 		}
 	}
 
-	if (symmetric) {
-		std::vector<InetAddress> r;
-		for(unsigned int k=1;k<=3;++k) {
-			for(std::map< uint32_t,std::pair<uint64_t,unsigned int> >::iterator i(maxPortByIp.begin());i!=maxPortByIp.end();++i) {
-				unsigned int p = i->second.second + k;
-				if (p > 65535) p -= 64511;
-				InetAddress pred(&(i->first),4,p);
-				if (std::find(r.begin(),r.end(),pred) == r.end())
-					r.push_back(pred);
-			}
-		}
-		return r;
+	std::vector<InetAddress> r;
+
+	// Try next port up from max for each
+	for(std::map< uint32_t,unsigned int >::iterator i(maxPortByIp.begin());i!=maxPortByIp.end();++i) {
+		unsigned int p = i->second + 1;
+		if (p > 65535) p -= 64511;
+		const InetAddress pred(&(i->first),4,p);
+		if (std::find(r.begin(),r.end(),pred) == r.end())
+			r.push_back(pred);
 	}
 
-	return std::vector<InetAddress>();
+	// Try a random port for each -- there are only 65535 so eventually it should work
+	for(std::map< uint32_t,unsigned int >::iterator i(maxPortByIp.begin());i!=maxPortByIp.end();++i) {
+		const InetAddress pred(&(i->first),4,1024 + ((unsigned int)RR->node->prng() % 64511));
+		if (std::find(r.begin(),r.end(),pred) == r.end())
+			r.push_back(pred);
+	}
+
+	return r;
 }
 
 } // namespace ZeroTier

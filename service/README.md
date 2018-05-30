@@ -14,7 +14,8 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
 	"physical": { /* Settings that apply to physical L2/L3 network paths. */
 		"NETWORK/bits": { /* Network e.g. 10.0.0.0/24 or fd00::/32 */
 			"blacklist": true|false, /* If true, blacklist this path for all ZeroTier traffic */
-			"trustedPathId": 0|!0 /* If present and nonzero, define this as a trusted path (see below) */
+			"trustedPathId": 0|!0, /* If present and nonzero, define this as a trusted path (see below) */
+			"mtu": 0|!0 /* if present and non-zero, set UDP maximum payload MTU for this path */
 		} /* ,... additional networks */
 	},
 	"virtual": { /* Settings applied to ZeroTier virtual network devices (VL1) */
@@ -30,13 +31,13 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
 		"softwareUpdateChannel": "release"|"beta", /* Software update channel */
 		"softwareUpdateDist": true|false, /* If true, distribute software updates (only really useful to ZeroTier, Inc. itself, default is false) */
 		"interfacePrefixBlacklist": [ "XXX",... ], /* Array of interface name prefixes (e.g. eth for eth#) to blacklist for ZT traffic */
-		"allowManagementFrom": "NETWORK/bits"|null /* If non-NULL, allow JSON/HTTP management from this IP network. Default is 127.0.0.1 only. */
+		"allowManagementFrom": "NETWORK/bits"|null, /* If non-NULL, allow JSON/HTTP management from this IP network. Default is 127.0.0.1 only. */
+		"bind": [ "ip",... ] /* If present and non-null, bind to these IPs instead of to each interface (wildcard IP allowed) */
 	}
 }
 ```
 
  * **trustedPathId**: A trusted path is a physical network over which encryption and authentication are not required. This provides a performance boost but sacrifices all ZeroTier's security features when communicating over this path. Only use this if you know what you are doing and really need the performance! To set up a trusted path, all devices using it *MUST* have the *same trusted path ID* for the same network. Trusted path IDs are arbitrary positive non-zero integers. For example a group of devices on a LAN with IPs in 10.0.0.0/24 could use it as a fast trusted path if they all had the same trusted path ID of "25" defined for that network.
- * **relayPolicy**: Under what circumstances should this device relay traffic for other devices? The default is TRUSTED, meaning that we'll only relay for devices we know to be members of a network we have joined. NEVER is the default on mobile devices (iOS/Android) and tells us to never relay traffic. ALWAYS is usually only set for upstreams and roots, allowing them to act as promiscuous relays for anyone who desires it.
 
 An example `local.conf`:
 
@@ -59,7 +60,7 @@ An example `local.conf`:
 	},
 	"settings": {
 		"softwareUpdate": "apply",
-		"softwraeUpdateChannel": "release"
+		"softwareUpdateChannel": "release"
 	}
 }
 ```
@@ -165,7 +166,7 @@ Getting /peer returns an array of peer objects for all current peers. See below 
 | versionRev            | integer       | Software revision of remote (if known)            | no       |
 | version               | string        | major.minor.revision                              | no       |
 | latency               | integer       | Latency in milliseconds if known                  | no       |
-| role                  | string        | LEAF, UPSTREAM, or ROOT                           | no       |
+| role                  | string        | LEAF, UPSTREAM, ROOT or PLANET                    | no       |
 | paths                 | [object]      | Currently active physical paths (see below)       | no       |
 
 Path objects:

@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Main binaries created in *nix builds
 /zerotier-one
 /zerotier-idtool
@@ -11,6 +10,7 @@
 .Apple*
 Thumbs.db
 @eaDir
+._*
 
 # Windows build droppings
 /windows/ZeroTierOne.sdf
@@ -27,6 +27,7 @@ Thumbs.db
 /windows/Release
 /windows/WebUIWrapper/bin
 /windows/WebUIWrapper/obj
+/windows/lib
 /ext/installfiles/windows/ZeroTier One-SetupFiles
 /ext/installfiles/windows/Prerequisites
 /ext/installfiles/windows/*-cache
@@ -111,3 +112,7 @@ build/
 !default.perspectivev3
 *.xccheckout
 xcuserdata/
+ext/librethinkdbxx/build
+.vscode
+__pycache__
+*~

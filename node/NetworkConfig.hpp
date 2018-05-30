@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_NETWORKCONFIG_HPP
@@ -39,8 +47,10 @@
 #include "Capability.hpp"
 #include "Tag.hpp"
 #include "Dictionary.hpp"
+#include "Hashtable.hpp"
 #include "Identity.hpp"
 #include "Utils.hpp"
+#include "Trace.hpp"
 
 /**
  * Default maximum time delta for COMs, tags, and capabilities
@@ -57,11 +67,6 @@
  * all currently online members to refresh.
  */
 #define ZT_NETWORKCONFIG_DEFAULT_CREDENTIAL_TIME_MIN_MAX_DELTA 185000ULL
-
-/**
- * Flag: allow passive bridging (experimental)
- */
-#define ZT_NETWORKCONFIG_FLAG_ALLOW_PASSIVE_BRIDGING 0x0000000000000001ULL
 
 /**
  * Flag: enable broadcast
@@ -84,19 +89,19 @@
 #define ZT_NETWORKCONFIG_FLAG_DISABLE_COMPRESSION 0x0000000000000010ULL
 
 /**
- * Device is an active bridge
+ * Device can bridge to other Ethernet networks and gets unknown recipient multicasts
  */
 #define ZT_NETWORKCONFIG_SPECIALIST_TYPE_ACTIVE_BRIDGE 0x0000020000000000ULL
 
 /**
- * Anchors are stable devices on this network that can cache multicast info, etc.
+ * Anchors are stable devices on this network that can act like roots when none are up
  */
 #define ZT_NETWORKCONFIG_SPECIALIST_TYPE_ANCHOR 0x0000040000000000ULL
 
 /**
- * Device can send CIRCUIT_TESTs for this network
+ * Designated multicast replicators replicate multicast in place of sender-side replication
  */
-#define ZT_NETWORKCONFIG_SPECIALIST_TYPE_CIRCUIT_TESTER 0x0000080000000000ULL
+#define ZT_NETWORKCONFIG_SPECIALIST_TYPE_MULTICAST_REPLICATOR 0x0000080000000000ULL
 
 namespace ZeroTier {
 
@@ -151,6 +156,10 @@ namespace ZeroTier {
 #define ZT_NETWORKCONFIG_DICT_KEY_REVISION "r"
 // address of member
 #define ZT_NETWORKCONFIG_DICT_KEY_ISSUED_TO "id"
+// remote trace target
+#define ZT_NETWORKCONFIG_DICT_KEY_REMOTE_TRACE_TARGET "tt"
+// remote trace level
+#define ZT_NETWORKCONFIG_DICT_KEY_REMOTE_TRACE_LEVEL "tl"
 // flags(hex)
 #define ZT_NETWORKCONFIG_DICT_KEY_FLAGS "f"
 // integer(hex)
@@ -159,6 +168,8 @@ namespace ZeroTier {
 #define ZT_NETWORKCONFIG_DICT_KEY_TYPE "t"
 // text
 #define ZT_NETWORKCONFIG_DICT_KEY_NAME "n"
+// network MTU
+#define ZT_NETWORKCONFIG_DICT_KEY_MTU "mtu"
 // credential time max delta in ms
 #define ZT_NETWORKCONFIG_DICT_KEY_CREDENTIAL_TIME_MAX_DELTA "ctmd"
 // binary serialized certificate of membership
@@ -177,13 +188,9 @@ namespace ZeroTier {
 #define ZT_NETWORKCONFIG_DICT_KEY_TAGS "TAG"
 // tags (binary blobs)
 #define ZT_NETWORKCONFIG_DICT_KEY_CERTIFICATES_OF_OWNERSHIP "COO"
-// curve25519 signature
-#define ZT_NETWORKCONFIG_DICT_KEY_SIGNATURE "C25519"
 
 // Legacy fields -- these are obsoleted but are included when older clients query
 
-// boolean (now a flag)
-#define ZT_NETWORKCONFIG_DICT_KEY_ALLOW_PASSIVE_BRIDGING_OLD "pb"
 // boolean (now a flag)
 #define ZT_NETWORKCONFIG_DICT_KEY_ENABLE_BROADCAST_OLD "eb"
 // IP/bits[,IP/bits,...]
@@ -214,21 +221,9 @@ namespace ZeroTier {
 class NetworkConfig
 {
 public:
-	NetworkConfig()
-	{
-		memset(this,0,sizeof(NetworkConfig));
-	}
-
-	NetworkConfig(const NetworkConfig &nc)
-	{
-		memcpy(this,&nc,sizeof(NetworkConfig));
-	}
-
-	inline NetworkConfig &operator=(const NetworkConfig &nc)
-	{
-		memcpy(this,&nc,sizeof(NetworkConfig));
-		return *this;
-	}
+	NetworkConfig() { memset(this,0,sizeof(NetworkConfig)); }
+	NetworkConfig(const NetworkConfig &nc) { ZT_FAST_MEMCPY(this,&nc,sizeof(NetworkConfig)); }
+	inline NetworkConfig &operator=(const NetworkConfig &nc) { ZT_FAST_MEMCPY(this,&nc,sizeof(NetworkConfig)); return *this; }
 
 	/**
 	 * Write this network config to a dictionary for transport
@@ -248,34 +243,29 @@ public:
 	bool fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY> &d);
 
 	/**
-	 * @return True if passive bridging is allowed (experimental)
-	 */
-	inline bool allowPassiveBridging() const throw() { return ((this->flags & ZT_NETWORKCONFIG_FLAG_ALLOW_PASSIVE_BRIDGING) != 0); }
-
-	/**
 	 * @return True if broadcast (ff:ff:ff:ff:ff:ff) address should work on this network
 	 */
-	inline bool enableBroadcast() const throw() { return ((this->flags & ZT_NETWORKCONFIG_FLAG_ENABLE_BROADCAST) != 0); }
+	inline bool enableBroadcast() const { return ((this->flags & ZT_NETWORKCONFIG_FLAG_ENABLE_BROADCAST) != 0); }
 
 	/**
 	 * @return True if IPv6 NDP emulation should be allowed for certain "magic" IPv6 address patterns
 	 */
-	inline bool ndpEmulation() const throw() { return ((this->flags & ZT_NETWORKCONFIG_FLAG_ENABLE_IPV6_NDP_EMULATION) != 0); }
+	inline bool ndpEmulation() const { return ((this->flags & ZT_NETWORKCONFIG_FLAG_ENABLE_IPV6_NDP_EMULATION) != 0); }
 
 	/**
 	 * @return True if frames should not be compressed
 	 */
-	inline bool disableCompression() const throw() { return ((this->flags & ZT_NETWORKCONFIG_FLAG_DISABLE_COMPRESSION) != 0); }
+	inline bool disableCompression() const { return ((this->flags & ZT_NETWORKCONFIG_FLAG_DISABLE_COMPRESSION) != 0); }
 
 	/**
 	 * @return Network type is public (no access control)
 	 */
-	inline bool isPublic() const throw() { return (this->type == ZT_NETWORK_TYPE_PUBLIC); }
+	inline bool isPublic() const { return (this->type == ZT_NETWORK_TYPE_PUBLIC); }
 
 	/**
 	 * @return Network type is private (certificate access control)
 	 */
-	inline bool isPrivate() const throw() { return (this->type == ZT_NETWORK_TYPE_PRIVATE); }
+	inline bool isPrivate() const { return (this->type == ZT_NETWORK_TYPE_PRIVATE); }
 
 	/**
 	 * @return ZeroTier addresses of devices on this network designated as active bridges
@@ -290,9 +280,25 @@ public:
 		return r;
 	}
 
-	/**
-	 * @return ZeroTier addresses of "anchor" devices on this network
-	 */
+	inline unsigned int activeBridges(Address ab[ZT_MAX_NETWORK_SPECIALISTS]) const
+	{
+		unsigned int c = 0;
+		for(unsigned int i=0;i<specialistCount;++i) {
+			if ((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_ACTIVE_BRIDGE) != 0)
+				ab[c++] = specialists[i];
+		}
+		return c;
+	}
+
+	inline bool isActiveBridge(const Address &a) const
+	{
+		for(unsigned int i=0;i<specialistCount;++i) {
+			if (((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_ACTIVE_BRIDGE) != 0)&&(a == specialists[i]))
+				return true;
+		}
+		return false;
+	}
+
 	inline std::vector<Address> anchors() const
 	{
 		std::vector<Address> r;
@@ -303,17 +309,62 @@ public:
 		return r;
 	}
 
-	/**
-	 * @param a Address to check
-	 * @return True if address is an anchor
-	 */
-	inline bool isAnchor(const Address &a) const
+	inline std::vector<Address> multicastReplicators() const
+	{
+		std::vector<Address> r;
+		for(unsigned int i=0;i<specialistCount;++i) {
+			if ((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_MULTICAST_REPLICATOR) != 0)
+				r.push_back(Address(specialists[i]));
+		}
+		return r;
+	}
+
+	inline unsigned int multicastReplicators(Address mr[ZT_MAX_NETWORK_SPECIALISTS]) const
+	{
+		unsigned int c = 0;
+		for(unsigned int i=0;i<specialistCount;++i) {
+			if ((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_MULTICAST_REPLICATOR) != 0)
+				mr[c++] = specialists[i];
+		}
+		return c;
+	}
+
+	inline bool isMulticastReplicator(const Address &a) const
 	{
 		for(unsigned int i=0;i<specialistCount;++i) {
-			if ((a == specialists[i])&&((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_ANCHOR) != 0))
+			if (((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_MULTICAST_REPLICATOR) != 0)&&(a == specialists[i]))
 				return true;
 		}
 		return false;
+	}
+
+	inline std::vector<Address> alwaysContactAddresses() const
+	{
+		std::vector<Address> r;
+		for(unsigned int i=0;i<specialistCount;++i) {
+			if ((specialists[i] & (ZT_NETWORKCONFIG_SPECIALIST_TYPE_ANCHOR | ZT_NETWORKCONFIG_SPECIALIST_TYPE_MULTICAST_REPLICATOR)) != 0)
+				r.push_back(Address(specialists[i]));
+		}
+		return r;
+	}
+
+	inline unsigned int alwaysContactAddresses(Address ac[ZT_MAX_NETWORK_SPECIALISTS]) const
+	{
+		unsigned int c = 0;
+		for(unsigned int i=0;i<specialistCount;++i) {
+			if ((specialists[i] & (ZT_NETWORKCONFIG_SPECIALIST_TYPE_ANCHOR | ZT_NETWORKCONFIG_SPECIALIST_TYPE_MULTICAST_REPLICATOR)) != 0)
+				ac[c++] = specialists[i];
+		}
+		return c;
+	}
+
+	inline void alwaysContactAddresses(Hashtable< Address,std::vector<InetAddress> > &a) const
+	{
+		for(unsigned int i=0;i<specialistCount;++i) {
+			if ((specialists[i] & (ZT_NETWORKCONFIG_SPECIALIST_TYPE_ANCHOR | ZT_NETWORKCONFIG_SPECIALIST_TYPE_MULTICAST_REPLICATOR)) != 0) {
+				a[Address(specialists[i])];
+			}
+		}
 	}
 
 	/**
@@ -322,8 +373,6 @@ public:
 	 */
 	inline bool permitsBridging(const Address &fromPeer) const
 	{
-		if ((flags & ZT_NETWORKCONFIG_FLAG_ALLOW_PASSIVE_BRIDGING) != 0)
-			return true;
 		for(unsigned int i=0;i<specialistCount;++i) {
 			if ((fromPeer == specialists[i])&&((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_ACTIVE_BRIDGE) != 0))
 				return true;
@@ -331,26 +380,7 @@ public:
 		return false;
 	}
 
-	/**
-	 * @param byPeer Address to check
-	 * @return True if this peer is allowed to do circuit tests on this network (controller is always true)
-	 */
-	inline bool circuitTestingAllowed(const Address &byPeer) const
-	{
-		if (byPeer.toInt() == ((networkId >> 24) & 0xffffffffffULL))
-			return true;
-		for(unsigned int i=0;i<specialistCount;++i) {
-			if ((byPeer == specialists[i])&&((specialists[i] & ZT_NETWORKCONFIG_SPECIALIST_TYPE_CIRCUIT_TESTER) != 0))
-				return true;
-		}
-		return false;
-	}
-
-	/**
-	 * @return True if this network config is non-NULL
-	 */
-	inline operator bool() const throw() { return (networkId != 0); }
-
+	inline operator bool() const { return (networkId != 0); }
 	inline bool operator==(const NetworkConfig &nc) const { return (memcmp(this,&nc,sizeof(NetworkConfig)) == 0); }
 	inline bool operator!=(const NetworkConfig &nc) const { return (!(*this == nc)); }
 
@@ -398,35 +428,6 @@ public:
 		return (Tag *)0;
 	}
 
-	/*
-	inline void dump() const
-	{
-		printf("networkId==%.16llx\n",networkId);
-		printf("timestamp==%llu\n",timestamp);
-		printf("credentialTimeMaxDelta==%llu\n",credentialTimeMaxDelta);
-		printf("revision==%llu\n",revision);
-		printf("issuedTo==%.10llx\n",issuedTo.toInt());
-		printf("multicastLimit==%u\n",multicastLimit);
-		printf("flags=%.8lx\n",(unsigned long)flags);
-		printf("specialistCount==%u\n",specialistCount);
-		for(unsigned int i=0;i<specialistCount;++i)
-			printf("  specialists[%u]==%.16llx\n",i,specialists[i]);
-		printf("routeCount==%u\n",routeCount);
-		for(unsigned int i=0;i<routeCount;++i) {
-			printf("  routes[i].target==%s\n",reinterpret_cast<const InetAddress *>(&(routes[i].target))->toString().c_str());
-			printf("  routes[i].via==%s\n",reinterpret_cast<const InetAddress *>(&(routes[i].via))->toIpString().c_str());
-			printf("  routes[i].flags==%.4x\n",(unsigned int)routes[i].flags);
-			printf("  routes[i].metric==%u\n",(unsigned int)routes[i].metric);
-		}
-		printf("staticIpCount==%u\n",staticIpCount);
-		for(unsigned int i=0;i<staticIpCount;++i)
-			printf("  staticIps[i]==%s\n",staticIps[i].toString().c_str());
-		printf("ruleCount==%u\n",ruleCount);
-		printf("name==%s\n",name);
-		printf("com==%s\n",com.toString().c_str());
-	}
-	*/
-
 	/**
 	 * Network ID that this configuration applies to
 	 */
@@ -435,12 +436,12 @@ public:
 	/**
 	 * Controller-side time of config generation/issue
 	 */
-	uint64_t timestamp;
+	int64_t timestamp;
 
 	/**
 	 * Max difference between timestamp and tag/capability timestamp
 	 */
-	uint64_t credentialTimeMaxDelta;
+	int64_t credentialTimeMaxDelta;
 
 	/**
 	 * Controller-side revision counter for this configuration
@@ -453,9 +454,24 @@ public:
 	Address issuedTo;
 
 	/**
+	 * If non-NULL, remote traces related to this network are sent here
+	 */
+	Address remoteTraceTarget;
+
+	/**
 	 * Flags (64-bit)
 	 */
 	uint64_t flags;
+
+	/**
+	 * Remote trace level
+	 */
+	Trace::Level remoteTraceLevel;
+
+	/**
+	 * Network MTU
+	 */
+	unsigned int mtu;
 
 	/**
 	 * Maximum number of recipients per multicast (not including active bridges)

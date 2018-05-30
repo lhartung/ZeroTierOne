@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_CONSTANTS_HPP
@@ -52,6 +60,8 @@
 #endif
 
 #ifdef __APPLE__
+#define likely(x) __builtin_expect((x),1)
+#define unlikely(x) __builtin_expect((x),0)
 #include <TargetConditionals.h>
 #ifndef __UNIX_LIKE__
 #define __UNIX_LIKE__
@@ -70,7 +80,7 @@
 #endif
 #endif
 
-#if defined(__FreeBSD__) || defined(__OpenBSD__)
+#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #ifndef __UNIX_LIKE__
 #define __UNIX_LIKE__
 #endif
@@ -124,6 +134,32 @@
 #include <endian.h>
 #endif
 
+#ifdef __NetBSD__
+#define RTF_MULTICAST   0x20000000
+#endif
+
+#if (defined(__GNUC__) && (__GNUC__ >= 3)) || (defined(__INTEL_COMPILER) && (__INTEL_COMPILER >= 800)) || defined(__clang__)
+#ifndef likely
+#define likely(x) __builtin_expect((x),1)
+#endif
+#ifndef unlikely
+#define unlikely(x) __builtin_expect((x),0)
+#endif
+#else
+#ifndef likely
+#define likely(x) (x)
+#endif
+#ifndef unlikely
+#define unlikely(x) (x)
+#endif
+#endif
+
+#ifdef __WINDOWS__
+#define ZT_PACKED_STRUCT(D) __pragma(pack(push,1)) D __pragma(pack(pop))
+#else
+#define ZT_PACKED_STRUCT(D) D __attribute__((packed))
+#endif
+
 /**
  * Length of a ZeroTier address in bytes
  */
@@ -140,26 +176,14 @@
 #define ZT_ADDRESS_RESERVED_PREFIX 0xff
 
 /**
- * Default payload MTU for UDP packets
- *
- * In the future we might support UDP path MTU discovery, but for now we
- * set a maximum that is equal to 1500 minus 8 (for PPPoE overhead, common
- * in some markets) minus 48 (IPv6 UDP overhead).
- */
-#define ZT_UDP_DEFAULT_PAYLOAD_MTU 1444
-
-/**
  * Default MTU used for Ethernet tap device
  */
-#define ZT_IF_MTU ZT_MAX_MTU
+#define ZT_DEFAULT_MTU 2800
 
 /**
- * Maximum number of packet fragments we'll support
- *
- * The actual spec allows 16, but this is the most we'll support right
- * now. Packets with more than this many fragments are dropped.
+ * Maximum number of packet fragments we'll support (protocol max: 16)
  */
-#define ZT_MAX_PACKET_FRAGMENTS 4
+#define ZT_MAX_PACKET_FRAGMENTS 7
 
 /**
  * Size of RX queue
@@ -168,11 +192,6 @@
  * than about 4 is probably going to cause a lot of lost packets.
  */
 #define ZT_RX_QUEUE_SIZE 64
-
-/**
- * RX queue entries older than this do not "exist"
- */
-#define ZT_RX_QUEUE_EXPIRE 4000
 
 /**
  * Length of secret key in bytes -- 256-bit -- do not change
@@ -187,37 +206,27 @@
 /**
  * How often Topology::clean() and Network::clean() and similar are called, in ms
  */
-#define ZT_HOUSEKEEPING_PERIOD 120000
-
-/**
- * How long to remember peer records in RAM if they haven't been used
- */
-#define ZT_PEER_IN_MEMORY_EXPIRATION 600000
+#define ZT_HOUSEKEEPING_PERIOD 60000
 
 /**
  * Delay between WHOIS retries in ms
  */
-#define ZT_WHOIS_RETRY_DELAY 1000
-
-/**
- * Maximum identity WHOIS retries (each attempt tries consulting a different peer)
- */
-#define ZT_MAX_WHOIS_RETRIES 4
+#define ZT_WHOIS_RETRY_DELAY 500
 
 /**
  * Transmit queue entry timeout
  */
-#define ZT_TRANSMIT_QUEUE_TIMEOUT (ZT_WHOIS_RETRY_DELAY * (ZT_MAX_WHOIS_RETRIES + 1))
+#define ZT_TRANSMIT_QUEUE_TIMEOUT 5000
 
 /**
  * Receive queue entry timeout
  */
-#define ZT_RECEIVE_QUEUE_TIMEOUT (ZT_WHOIS_RETRY_DELAY * (ZT_MAX_WHOIS_RETRIES + 1))
+#define ZT_RECEIVE_QUEUE_TIMEOUT 5000
 
 /**
  * Maximum latency to allow for OK(HELLO) before packet is discarded
  */
-#define ZT_HELLO_MAX_ALLOWABLE_LATENCY 60000
+#define ZT_HELLO_MAX_ALLOWABLE_LATENCY 120000
 
 /**
  * Maximum number of ZT hops allowed (this is not IP hops/TTL)
@@ -225,11 +234,6 @@
  * The protocol allows up to 7, but we limit it to something smaller.
  */
 #define ZT_RELAY_MAX_HOPS 3
-
-/**
- * Maximum number of upstreams to use (far more than we should ever need)
- */
-#define ZT_MAX_UPSTREAMS 64
 
 /**
  * Expire time for multicast 'likes' and indirect multicast memberships in ms
@@ -269,16 +273,6 @@
 #define ZT_PATH_HEARTBEAT_PERIOD 14000
 
 /**
- * Paths are considered inactive if they have not received traffic in this long
- */
-#define ZT_PATH_ALIVE_TIMEOUT 45000
-
-/**
- * Minimum time between attempts to check dead paths to see if they can be re-awakened
- */
-#define ZT_PATH_MIN_REACTIVATE_INTERVAL 2500
-
-/**
  * Do not accept HELLOs over a given path more often than this
  */
 #define ZT_PATH_HELLO_RATE_LIMIT 1000
@@ -292,11 +286,6 @@
  * Paths are considered expired if they have not sent us a real packet in this long
  */
 #define ZT_PEER_PATH_EXPIRATION ((ZT_PEER_PING_PERIOD * 4) + 3000)
-
-/**
- * Send a full HELLO every this often (ms)
- */
-#define ZT_PEER_SEND_FULL_HELLO_EVERY (ZT_PEER_PING_PERIOD * 2)
 
 /**
  * How often to retry expired paths that we're still remembering
@@ -364,7 +353,7 @@
 /**
  * Time horizon for push direct paths cutoff
  */
-#define ZT_PUSH_DIRECT_PATHS_CUTOFF_TIME 60000
+#define ZT_PUSH_DIRECT_PATHS_CUTOFF_TIME 30000
 
 /**
  * Maximum number of direct path pushes within cutoff time
@@ -373,12 +362,12 @@
  * per CUTOFF_TIME milliseconds per peer to prevent this from being
  * useful for DOS amplification attacks.
  */
-#define ZT_PUSH_DIRECT_PATHS_CUTOFF_LIMIT 5
+#define ZT_PUSH_DIRECT_PATHS_CUTOFF_LIMIT 8
 
 /**
  * Maximum number of paths per IP scope (e.g. global, link-local) and family (e.g. v4/v6)
  */
-#define ZT_PUSH_DIRECT_PATHS_MAX_PER_SCOPE_AND_FAMILY 4
+#define ZT_PUSH_DIRECT_PATHS_MAX_PER_SCOPE_AND_FAMILY 8
 
 /**
  * Time horizon for VERB_NETWORK_CREDENTIALS cutoff
@@ -453,5 +442,14 @@
 #define ZT_ETHERTYPE_IPX_A 0x8137
 #define ZT_ETHERTYPE_IPX_B 0x8138
 #define ZT_ETHERTYPE_IPV6 0x86dd
+
+#define ZT_EXCEPTION_OUT_OF_BOUNDS 100
+#define ZT_EXCEPTION_OUT_OF_MEMORY 101
+#define ZT_EXCEPTION_PRIVATE_KEY_REQUIRED 102
+#define ZT_EXCEPTION_INVALID_ARGUMENT 103
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_TYPE 200
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW 201
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN 202
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_BAD_ENCODING 203
 
 #endif

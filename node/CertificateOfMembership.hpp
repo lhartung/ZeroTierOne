@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_CERTIFICATEOFMEMBERSHIP_HPP
@@ -111,7 +119,7 @@ public:
 
 	CertificateOfMembership(const CertificateOfMembership &c)
 	{
-		memcpy(this,&c,sizeof(CertificateOfMembership));
+		ZT_FAST_MEMCPY(this,&c,sizeof(CertificateOfMembership));
 	}
 
 	/**
@@ -134,12 +142,12 @@ public:
 		_qualifiers[2].value = issuedTo.toInt();
 		_qualifiers[2].maxDelta = 0xffffffffffffffffULL;
 		_qualifierCount = 3;
-		memset(_signature.data,0,_signature.size());
+		memset(_signature.data,0,ZT_C25519_SIGNATURE_LEN);
 	}
 
 	inline CertificateOfMembership &operator=(const CertificateOfMembership &c)
 	{
-		memcpy(this,&c,sizeof(CertificateOfMembership));
+		ZT_FAST_MEMCPY(this,&c,sizeof(CertificateOfMembership));
 		return *this;
 	}
 
@@ -168,7 +176,7 @@ public:
 	/**
 	 * @return Timestamp for this cert and maximum delta for timestamp
 	 */
-	inline uint64_t timestamp() const
+	inline int64_t timestamp() const
 	{
 		for(unsigned int i=0;i<_qualifierCount;++i) {
 			if (_qualifiers[i].id == COM_RESERVED_ID_TIMESTAMP)
@@ -285,7 +293,7 @@ public:
 		}
 		_signedBy.appendTo(b);
 		if (_signedBy)
-			b.append(_signature.data,(unsigned int)_signature.size());
+			b.append(_signature.data,ZT_C25519_SIGNATURE_LEN);
 	}
 
 	template<unsigned int C>
@@ -297,14 +305,14 @@ public:
 		_signedBy.zero();
 
 		if (b[p++] != 1)
-			throw std::invalid_argument("invalid object");
+			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_TYPE;
 
 		unsigned int numq = b.template at<uint16_t>(p); p += sizeof(uint16_t);
 		uint64_t lastId = 0;
 		for(unsigned int i=0;i<numq;++i) {
 			const uint64_t qid = b.template at<uint64_t>(p);
 			if (qid < lastId)
-				throw std::invalid_argument("qualifiers not sorted");
+				throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_BAD_ENCODING;
 			else lastId = qid;
 			if (_qualifierCount < ZT_NETWORK_COM_MAX_QUALIFIERS) {
 				_qualifiers[_qualifierCount].id = qid;
@@ -313,7 +321,7 @@ public:
 				p += 24;
 				++_qualifierCount;
 			} else {
-				throw std::invalid_argument("too many qualifiers");
+				throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 			}
 		}
 
@@ -321,8 +329,8 @@ public:
 		p += ZT_ADDRESS_LENGTH;
 
 		if (_signedBy) {
-			memcpy(_signature.data,b.field(p,(unsigned int)_signature.size()),_signature.size());
-			p += (unsigned int)_signature.size();
+			ZT_FAST_MEMCPY(_signature.data,b.field(p,ZT_C25519_SIGNATURE_LEN),ZT_C25519_SIGNATURE_LEN);
+			p += ZT_C25519_SIGNATURE_LEN;
 		}
 
 		return (p - startAt);
@@ -340,7 +348,7 @@ public:
 			if ((a.id != b.id)||(a.value != b.value)||(a.maxDelta != b.maxDelta))
 				return false;
 		}
-		return (_signature == c._signature);
+		return (memcmp(_signature.data,c._signature.data,ZT_C25519_SIGNATURE_LEN) == 0);
 	}
 	inline bool operator!=(const CertificateOfMembership &c) const { return (!(*this == c)); }
 
@@ -351,7 +359,7 @@ private:
 		uint64_t id;
 		uint64_t value;
 		uint64_t maxDelta;
-		inline bool operator<(const _Qualifier &q) const throw() { return (id < q.id); } // sort order
+		inline bool operator<(const _Qualifier &q) const { return (id < q.id); } // sort order
 	};
 
 	Address _signedBy;

@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include <stdio.h>
@@ -48,6 +56,23 @@
 #include "OSUtils.hpp"
 
 namespace ZeroTier {
+
+unsigned int OSUtils::ztsnprintf(char *buf,unsigned int len,const char *fmt,...)
+{
+	va_list ap;
+
+	va_start(ap,fmt);
+	int n = (int)vsnprintf(buf,len,fmt,ap);
+	va_end(ap);
+
+	if ((n >= (int)len)||(n < 0)) {
+		if (len)
+			buf[len - 1] = (char)0;
+		throw std::length_error("buf[] overflow");
+	}
+
+	return (unsigned int)n;
+}
 
 #ifdef __UNIX_LIKE__
 bool OSUtils::redirectUnixOutputs(const char *stdoutPath,const char *stderrPath)
@@ -108,7 +133,7 @@ std::vector<std::string> OSUtils::listDirectory(const char *path,bool includeDir
 	return r;
 }
 
-long OSUtils::cleanDirectory(const char *path,const uint64_t olderThan)
+long OSUtils::cleanDirectory(const char *path,const int64_t olderThan)
 {
 	long cleaned = 0;
 
@@ -125,8 +150,8 @@ long OSUtils::cleanDirectory(const char *path,const uint64_t olderThan)
 					date.LowPart = ffd.ftLastWriteTime.dwLowDateTime;
 					if (date.QuadPart > 0) {
 							date.QuadPart -= adjust.QuadPart;
-							if ((uint64_t)((date.QuadPart / 10000000) * 1000) < olderThan) {
-									Utils::snprintf(tmp, sizeof(tmp), "%s\\%s", path, ffd.cFileName);
+							if ((int64_t)((date.QuadPart / 10000000) * 1000) < olderThan) {
+									ztsnprintf(tmp, sizeof(tmp), "%s\\%s", path, ffd.cFileName);
 									if (DeleteFileA(tmp))
 											++cleaned;
 							}
@@ -149,9 +174,9 @@ long OSUtils::cleanDirectory(const char *path,const uint64_t olderThan)
 			break;
 		if (dptr) {
 			if ((strcmp(dptr->d_name,"."))&&(strcmp(dptr->d_name,".."))&&(dptr->d_type == DT_REG)) {
-				Utils::snprintf(tmp,sizeof(tmp),"%s/%s",path,dptr->d_name);
+				ztsnprintf(tmp,sizeof(tmp),"%s/%s",path,dptr->d_name);
 				if (stat(tmp,&st) == 0) {
-					uint64_t mt = (uint64_t)(st.st_mtime);
+					int64_t mt = (int64_t)(st.st_mtime);
 					if ((mt > 0)&&((mt * 1000) < olderThan)) {
 						if (unlink(tmp) == 0)
 							++cleaned;
@@ -279,7 +304,7 @@ int64_t OSUtils::getFileSize(const char *path)
 
 bool OSUtils::readFile(const char *path,std::string &buf)
 {
-	char tmp[1024];
+	char tmp[16384];
 	FILE *f = fopen(path,"rb");
 	if (f) {
 		for(;;) {
@@ -355,6 +380,24 @@ std::vector<std::string> OSUtils::split(const char *s,const char *const sep,cons
 
 std::string OSUtils::platformDefaultHomePath()
 {
+#ifdef __QNAP__
+	char *cmd = "/sbin/getcfg zerotier Install_Path -f /etc/config/qpkg.conf";
+    char buf[128];
+    FILE *fp;
+    if ((fp = popen(cmd, "r")) == NULL) {
+        printf("Error opening pipe!\n");
+        return NULL;
+    }
+    while (fgets(buf, 128, fp) != NULL) { }
+    if(pclose(fp))  {
+        printf("Command not found or exited with error status\n");
+        return NULL;
+    }
+    std::string homeDir = std::string(buf);
+    homeDir.erase(std::remove(homeDir.begin(), homeDir.end(), '\n'), homeDir.end());
+    return homeDir;
+#endif
+
 #ifdef __UNIX_LIKE__
 
 #ifdef __APPLE__
@@ -391,7 +434,7 @@ std::string OSUtils::platformDefaultHomePath()
 
 // Inline these massive JSON operations in one place only to reduce binary footprint and compile time
 nlohmann::json OSUtils::jsonParse(const std::string &buf) { return nlohmann::json::parse(buf.c_str()); }
-std::string OSUtils::jsonDump(const nlohmann::json &j) { return j.dump(1); }
+std::string OSUtils::jsonDump(const nlohmann::json &j,int indentation) { return j.dump(indentation); }
 
 uint64_t OSUtils::jsonInt(const nlohmann::json &jv,const uint64_t dfl)
 {
@@ -401,6 +444,21 @@ uint64_t OSUtils::jsonInt(const nlohmann::json &jv,const uint64_t dfl)
 		} else if (jv.is_string()) {
 			std::string s = jv;
 			return Utils::strToU64(s.c_str());
+		} else if (jv.is_boolean()) {
+			return ((bool)jv ? 1ULL : 0ULL);
+		}
+	} catch ( ... ) {}
+	return dfl;
+}
+
+uint64_t OSUtils::jsonIntHex(const nlohmann::json &jv,const uint64_t dfl)
+{
+	try {
+		if (jv.is_number()) {
+			return (uint64_t)jv;
+		} else if (jv.is_string()) {
+			std::string s = jv;
+			return Utils::hexStrToU64(s.c_str());
 		} else if (jv.is_boolean()) {
 			return ((bool)jv ? 1ULL : 0ULL);
 		}
@@ -438,7 +496,7 @@ std::string OSUtils::jsonString(const nlohmann::json &jv,const char *dfl)
 			return jv;
 		} else if (jv.is_number()) {
 			char tmp[64];
-			Utils::snprintf(tmp,sizeof(tmp),"%llu",(uint64_t)jv);
+			ztsnprintf(tmp,sizeof(tmp),"%llu",(uint64_t)jv);
 			return tmp;
 		} else if (jv.is_boolean()) {
 			return ((bool)jv ? std::string("1") : std::string("0"));
@@ -451,9 +509,10 @@ std::string OSUtils::jsonBinFromHex(const nlohmann::json &jv)
 {
 	std::string s(jsonString(jv,""));
 	if (s.length() > 0) {
-		char *buf = new char[(s.length() / 2) + 1];
+		unsigned int buflen = (unsigned int)((s.length() / 2) + 1);
+		char *buf = new char[buflen];
 		try {
-			unsigned int l = Utils::unhex(s,buf,(unsigned int)s.length());
+			unsigned int l = Utils::unhex(s.c_str(),buf,buflen);
 			std::string b(buf,l);
 			delete [] buf;
 			return b;

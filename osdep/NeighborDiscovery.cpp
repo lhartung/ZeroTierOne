@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include "NeighborDiscovery.hpp"
@@ -24,7 +32,7 @@
 #include <assert.h>
 
 namespace ZeroTier {
-
+    
 uint16_t calc_checksum (uint16_t *addr, int len)
 {
     int count = len;
@@ -185,7 +193,7 @@ sockaddr_storage NeighborDiscovery::processIncomingND(const uint8_t *nd, unsigne
     assert(sizeof(_neighbor_advertisement) == 32);
 
     const uint64_t now = OSUtils::now();
-    sockaddr_storage ip = ZT_SOCKADDR_NULL;
+    sockaddr_storage ip = {0};
 
     if (len >= sizeof(_neighbor_solicitation) && nd[0] == 0x87) {
         // respond to Neighbor Solicitation request for local address

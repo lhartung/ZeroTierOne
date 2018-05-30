@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_MEMBERSHIP_HPP
@@ -72,7 +80,7 @@ public:
 	 * @param localCapabilityIndex Index of local capability to include (in nconf.capabilities[]) or -1 if none
 	 * @param force If true, send objects regardless of last push time
 	 */
-	void pushCredentials(const RuntimeEnvironment *RR,void *tPtr,const uint64_t now,const Address &peerAddress,const NetworkConfig &nconf,int localCapabilityIndex,const bool force);
+	void pushCredentials(const RuntimeEnvironment *RR,void *tPtr,const int64_t now,const Address &peerAddress,const NetworkConfig &nconf,int localCapabilityIndex,const bool force);
 
 	/**
 	 * Check whether we should push MULTICAST_LIKEs to this peer, and update last sent time if true
@@ -80,7 +88,7 @@ public:
 	 * @param now Current time
 	 * @return True if we should update multicasts
 	 */
-	inline bool multicastLikeGate(const uint64_t now)
+	inline bool multicastLikeGate(const int64_t now)
 	{
 		if ((now - _lastUpdatedMulticast) >= ZT_MULTICAST_ANNOUNCE_PERIOD) {
 			_lastUpdatedMulticast = now;
@@ -100,6 +108,11 @@ public:
 		if (nconf.isPublic()) return true;
 		if (_com.timestamp() <= _comRevocationThreshold) return false;
 		return nconf.com.agreesWith(_com);
+	}
+
+	inline bool recentlyAssociated(const int64_t now) const
+	{
+		return ((_com)&&((now - _com.timestamp()) < ZT_PEER_ACTIVITY_TIMEOUT));
 	}
 
 	/**
@@ -167,7 +180,7 @@ public:
 	 * @param now Current time
 	 * @param nconf Current network configuration
 	 */
-	void clean(const uint64_t now,const NetworkConfig &nconf);
+	void clean(const int64_t now,const NetworkConfig &nconf);
 
 	/**
 	 * Reset last pushed time for local credentials
@@ -189,9 +202,9 @@ private:
 	template<typename C>
 	inline bool _isCredentialTimestampValid(const NetworkConfig &nconf,const C &remoteCredential) const
 	{
-		const uint64_t ts = remoteCredential.timestamp();
+		const int64_t ts = remoteCredential.timestamp();
 		if (((ts >= nconf.timestamp) ? (ts - nconf.timestamp) : (nconf.timestamp - ts)) <= nconf.credentialTimeMaxDelta) {
-			const uint64_t *threshold = _revocations.get(credentialKey(C::credentialType(),remoteCredential.id()));
+			const int64_t *threshold = _revocations.get(credentialKey(C::credentialType(),remoteCredential.id()));
 			return ((!threshold)||(ts > *threshold));
 		}
 		return false;
@@ -210,19 +223,19 @@ private:
 	}
 
 	// Last time we pushed MULTICAST_LIKE(s)
-	uint64_t _lastUpdatedMulticast;
+	int64_t _lastUpdatedMulticast;
 
 	// Last time we pushed our COM to this peer
-	uint64_t _lastPushedCom;
+	int64_t _lastPushedCom;
 
 	// Revocation threshold for COM or 0 if none
-	uint64_t _comRevocationThreshold;
+	int64_t _comRevocationThreshold;
 
 	// Remote member's latest network COM
 	CertificateOfMembership _com;
 
 	// Revocations by credentialKey()
-	Hashtable< uint64_t,uint64_t > _revocations;
+	Hashtable< uint64_t,int64_t > _revocations;
 
 	// Remote credentials that we have received from this member (and that are valid)
 	Hashtable< uint32_t,Tag > _remoteTags;

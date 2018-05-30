@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_NODE_HPP
@@ -38,13 +46,7 @@
 #include "Path.hpp"
 #include "Salsa20.hpp"
 #include "NetworkController.hpp"
-
-#undef TRACE
-#ifdef ZT_TRACE
-#define TRACE(f,...) RR->node->postTrace(__FILE__,__LINE__,f,##__VA_ARGS__)
-#else
-#define TRACE(f,...) {}
-#endif
+#include "Hashtable.hpp"
 
 // Bit mask for "expecting reply" hash
 #define ZT_EXPECTING_REPLIES_BUCKET_MASK1 255
@@ -62,7 +64,7 @@ class World;
 class Node : public NetworkController::Sender
 {
 public:
-	Node(void *uptr,void *tptr,const struct ZT_Node_Callbacks *callbacks,uint64_t now);
+	Node(void *uptr,void *tptr,const struct ZT_Node_Callbacks *callbacks,int64_t now);
 	virtual ~Node();
 
 	// Get rid of alignment warnings on 32-bit Windows and possibly improve performance
@@ -75,15 +77,15 @@ public:
 
 	ZT_ResultCode processWirePacket(
 		void *tptr,
-		uint64_t now,
-		const struct sockaddr_storage *localAddress,
+		int64_t now,
+		int64_t localSocket,
 		const struct sockaddr_storage *remoteAddress,
 		const void *packetData,
 		unsigned int packetLength,
-		volatile uint64_t *nextBackgroundTaskDeadline);
+		volatile int64_t *nextBackgroundTaskDeadline);
 	ZT_ResultCode processVirtualNetworkFrame(
 		void *tptr,
-		uint64_t now,
+		int64_t now,
 		uint64_t nwid,
 		uint64_t sourceMac,
 		uint64_t destMac,
@@ -91,8 +93,8 @@ public:
 		unsigned int vlanId,
 		const void *frameData,
 		unsigned int frameLength,
-		volatile uint64_t *nextBackgroundTaskDeadline);
-	ZT_ResultCode processBackgroundTasks(void *tptr,uint64_t now,volatile uint64_t *nextBackgroundTaskDeadline);
+		volatile int64_t *nextBackgroundTaskDeadline);
+	ZT_ResultCode processBackgroundTasks(void *tptr,int64_t now,volatile int64_t *nextBackgroundTaskDeadline);
 	ZT_ResultCode join(uint64_t nwid,void *uptr,void *tptr);
 	ZT_ResultCode leave(uint64_t nwid,void **uptr,void *tptr);
 	ZT_ResultCode multicastSubscribe(void *tptr,uint64_t nwid,uint64_t multicastGroup,unsigned long multicastAdi);
@@ -109,35 +111,18 @@ public:
 	void clearLocalInterfaceAddresses();
 	int sendUserMessage(void *tptr,uint64_t dest,uint64_t typeId,const void *data,unsigned int len);
 	void setNetconfMaster(void *networkControllerInstance);
-	ZT_ResultCode circuitTestBegin(void *tptr,ZT_CircuitTest *test,void (*reportCallback)(ZT_Node *,ZT_CircuitTest *,const ZT_CircuitTestReport *));
-	void circuitTestEnd(ZT_CircuitTest *test);
-	ZT_ResultCode clusterInit(
-		unsigned int myId,
-		const struct sockaddr_storage *zeroTierPhysicalEndpoints,
-		unsigned int numZeroTierPhysicalEndpoints,
-		int x,
-		int y,
-		int z,
-		void (*sendFunction)(void *,unsigned int,const void *,unsigned int),
-		void *sendFunctionArg,
-		int (*addressToLocationFunction)(void *,const struct sockaddr_storage *,int *,int *,int *),
-		void *addressToLocationFunctionArg);
-	ZT_ResultCode clusterAddMember(unsigned int memberId);
-	void clusterRemoveMember(unsigned int memberId);
-	void clusterHandleIncomingMessage(const void *msg,unsigned int len);
-	void clusterStatus(ZT_ClusterStatus *cs);
 
 	// Internal functions ------------------------------------------------------
 
-	inline uint64_t now() const throw() { return _now; }
+	inline int64_t now() const { return _now; }
 
-	inline bool putPacket(void *tPtr,const InetAddress &localAddress,const InetAddress &addr,const void *data,unsigned int len,unsigned int ttl = 0)
+	inline bool putPacket(void *tPtr,const int64_t localSocket,const InetAddress &addr,const void *data,unsigned int len,unsigned int ttl = 0)
 	{
 		return (_cb.wirePacketSendFunction(
 			reinterpret_cast<ZT_Node *>(this),
 			_uPtr,
 			tPtr,
-			reinterpret_cast<const struct sockaddr_storage *>(&localAddress),
+			localSocket,
 			reinterpret_cast<const struct sockaddr_storage *>(&addr),
 			data,
 			len,
@@ -163,26 +148,27 @@ public:
 	inline SharedPtr<Network> network(uint64_t nwid) const
 	{
 		Mutex::Lock _l(_networks_m);
-		return _network(nwid);
+		const SharedPtr<Network> *n = _networks.get(nwid);
+		if (n)
+			return *n;
+		return SharedPtr<Network>();
 	}
 
 	inline bool belongsToNetwork(uint64_t nwid) const
 	{
 		Mutex::Lock _l(_networks_m);
-		for(std::vector< std::pair< uint64_t, SharedPtr<Network> > >::const_iterator i=_networks.begin();i!=_networks.end();++i) {
-			if (i->first == nwid)
-				return true;
-		}
-		return false;
+		return _networks.contains(nwid);
 	}
 
 	inline std::vector< SharedPtr<Network> > allNetworks() const
 	{
 		std::vector< SharedPtr<Network> > nw;
 		Mutex::Lock _l(_networks_m);
-		nw.reserve(_networks.size());
-		for(std::vector< std::pair< uint64_t, SharedPtr<Network> > >::const_iterator i=_networks.begin();i!=_networks.end();++i)
-			nw.push_back(i->second);
+		Hashtable< uint64_t,SharedPtr<Network> >::Iterator i(*const_cast< Hashtable< uint64_t,SharedPtr<Network> > * >(&_networks));
+		uint64_t *k = (uint64_t *)0;
+		SharedPtr<Network> *v = (SharedPtr<Network> *)0;
+		while (i.next(k,v))
+			nw.push_back(*v);
 		return nw;
 	}
 
@@ -192,30 +178,26 @@ public:
 		return _directPaths;
 	}
 
-	inline bool dataStorePut(void *tPtr,const char *name,const void *data,unsigned int len,bool secure) { return (_cb.dataStorePutFunction(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,name,data,len,(int)secure) == 0); }
-	inline bool dataStorePut(void *tPtr,const char *name,const std::string &data,bool secure) { return dataStorePut(tPtr,name,(const void *)data.data(),(unsigned int)data.length(),secure); }
-	inline void dataStoreDelete(void *tPtr,const char *name) { _cb.dataStorePutFunction(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,name,(const void *)0,0,0); }
-	std::string dataStoreGet(void *tPtr,const char *name);
-
 	inline void postEvent(void *tPtr,ZT_Event ev,const void *md = (const void *)0) { _cb.eventCallback(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,ev,md); }
 
 	inline int configureVirtualNetworkPort(void *tPtr,uint64_t nwid,void **nuptr,ZT_VirtualNetworkConfigOperation op,const ZT_VirtualNetworkConfig *nc) { return _cb.virtualNetworkConfigFunction(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,nwid,nuptr,op,nc); }
 
-	inline bool online() const throw() { return _online; }
+	inline bool online() const { return _online; }
 
-#ifdef ZT_TRACE
-	void postTrace(const char *module,unsigned int line,const char *fmt,...);
-#endif
+	inline int stateObjectGet(void *const tPtr,ZT_StateObjectType type,const uint64_t id[2],void *const data,const unsigned int maxlen) { return _cb.stateGetFunction(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,type,id,data,maxlen); }
+	inline void stateObjectPut(void *const tPtr,ZT_StateObjectType type,const uint64_t id[2],const void *const data,const unsigned int len) { _cb.statePutFunction(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,type,id,data,(int)len); }
+	inline void stateObjectDelete(void *const tPtr,ZT_StateObjectType type,const uint64_t id[2]) { _cb.statePutFunction(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,type,id,(const void *)0,-1); }
 
-	bool shouldUsePathForZeroTierTraffic(void *tPtr,const Address &ztaddr,const InetAddress &localAddress,const InetAddress &remoteAddress);
+	bool shouldUsePathForZeroTierTraffic(void *tPtr,const Address &ztaddr,const int64_t localSocket,const InetAddress &remoteAddress);
 	inline bool externalPathLookup(void *tPtr,const Address &ztaddr,int family,InetAddress &addr) { return ( (_cb.pathLookupFunction) ? (_cb.pathLookupFunction(reinterpret_cast<ZT_Node *>(this),_uPtr,tPtr,ztaddr.toInt(),family,reinterpret_cast<struct sockaddr_storage *>(&addr)) != 0) : false ); }
 
 	uint64_t prng();
-	void postCircuitTestReport(const ZT_CircuitTestReport *report);
-	void setTrustedPaths(const struct sockaddr_storage *networks,const uint64_t *ids,unsigned int count);
+	ZT_ResultCode setPhysicalPathConfiguration(const struct sockaddr_storage *pathNetwork,const ZT_PhysicalPathConfiguration *pathConfig);
 
 	World planet() const;
 	std::vector<World> moons() const;
+
+	inline const Identity &identity() const { return _RR.identity; }
 
 	/**
 	 * Register that we are expecting a reply to a packet ID
@@ -261,7 +243,7 @@ public:
 	 * @param from Source address of packet
 	 * @return True if within rate limits
 	 */
-	inline bool rateGateIdentityVerification(const uint64_t now,const InetAddress &from)
+	inline bool rateGateIdentityVerification(const int64_t now,const InetAddress &from)
 	{
 		unsigned long iph = from.rateGateHash();
 		if ((now - _lastIdentityVerification[iph]) >= ZT_IDENTITY_VALIDATION_SOURCE_RATE_LIMIT) {
@@ -275,17 +257,10 @@ public:
 	virtual void ncSendRevocation(const Address &destination,const Revocation &rev);
 	virtual void ncSendError(uint64_t nwid,uint64_t requestPacketId,const Address &destination,NetworkController::ErrorCode errorCode);
 
-private:
-	inline SharedPtr<Network> _network(uint64_t nwid) const
-	{
-		// assumes _networks_m is locked
-		for(std::vector< std::pair< uint64_t, SharedPtr<Network> > >::const_iterator i=_networks.begin();i!=_networks.end();++i) {
-			if (i->first == nwid)
-				return i->second;
-		}
-		return SharedPtr<Network>();
-	}
+	inline const Address &remoteTraceTarget() const { return _remoteTraceTarget; }
+	inline Trace::Level remoteTraceLevel() const { return _remoteTraceLevel; }
 
+private:
 	RuntimeEnvironment _RR;
 	RuntimeEnvironment *RR;
 	void *_uPtr; // _uptr (lower case) is reserved in Visual Studio :P
@@ -296,23 +271,24 @@ private:
 	uint32_t _expectingRepliesTo[ZT_EXPECTING_REPLIES_BUCKET_MASK1 + 1][ZT_EXPECTING_REPLIES_BUCKET_MASK2 + 1];
 
 	// Time of last identity verification indexed by InetAddress.rateGateHash() -- used in IncomingPacket::_doHELLO() via rateGateIdentityVerification()
-	uint64_t _lastIdentityVerification[16384];
+	int64_t _lastIdentityVerification[16384];
 
-	std::vector< std::pair< uint64_t, SharedPtr<Network> > > _networks;
+	Hashtable< uint64_t,SharedPtr<Network> > _networks;
 	Mutex _networks_m;
-
-	std::vector< ZT_CircuitTest * > _circuitTests;
-	Mutex _circuitTests_m;
 
 	std::vector<InetAddress> _directPaths;
 	Mutex _directPaths_m;
 
 	Mutex _backgroundTasksLock;
 
-	uint64_t _now;
-	uint64_t _lastPingCheck;
-	uint64_t _lastHousekeepingRun;
-	volatile uint64_t _prngState[2];
+	Address _remoteTraceTarget;
+	enum Trace::Level _remoteTraceLevel;
+
+	volatile int64_t _now;
+	int64_t _lastPingCheck;
+	int64_t _lastHousekeepingRun;
+	int64_t _lastMemoizedTraceSettings;
+	volatile int64_t _prngState[2];
 	bool _online;
 };
 

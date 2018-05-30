@@ -1,11 +1,8 @@
-OBJS=\
-	controller/EmbeddedNetworkController.o \
-	controller/JSONDB.o \
+CORE_OBJS=\
 	node/C25519.o \
 	node/Capability.o \
 	node/CertificateOfMembership.o \
 	node/CertificateOfOwnership.o \
-	node/Cluster.o \
 	node/Identity.o \
 	node/IncomingPacket.o \
 	node/InetAddress.o \
@@ -26,9 +23,17 @@ OBJS=\
 	node/Switch.o \
 	node/Tag.o \
 	node/Topology.o \
-	node/Utils.o \
+	node/Trace.o \
+	node/Utils.o
+
+ONE_OBJS=\
+	controller/EmbeddedNetworkController.o \
+	controller/DB.o \
+	controller/FileDB.o \
+	controller/RethinkDB.o \
 	osdep/ManagedRoute.o \
 	osdep/Http.o \
 	osdep/OSUtils.o \
-	service/ClusterGeoIpService.o \
-	service/SoftwareUpdater.o
+	service/SoftwareUpdater.o \
+	service/OneService.o
+

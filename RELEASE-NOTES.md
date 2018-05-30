@@ -1,6 +1,55 @@
 ZeroTier Release Notes
 ======
 
+# 2018-05-08 -- Version 1.2.10
+
+ * Fix bug loading `moons.d/` files for federated root operation.
+ * Fix compile problem with ZT_DEBUG on some versions of `clang`
+ * Fix slow network startup bug related to loading of `networks.d/` cache files
+
+# 2018-04-27 -- Version 1.2.8
+
+ * Linux version once again builds with PIE (position independent executable) flags
+ * Fixed bug in zerotier-idtool file sign and verify
+ * Fixed minor OSX app typo
+ * Merged alpha NetBSD support (mostly untested, so YMMV)
+ * Merged several minor typo and one-liner bug fixes
+
+# 2018-04-17 -- Version 1.2.6
+
+ * Features and Core Improvements
+    * Path selection has been overhauled to improve path stability, simplify code, and prepare for multi-path and trunking in the next major release.
+    * This version introduces remote tracing for remote diagnostics. Network controllers can set a node (usually the controller itself) to receive remote tracing events from all members of the network or from select members. Events are only sent if they pertain to a given network for security reasons.
+    * Multicast replication can now be done by designated multicast replicators on a network (flagged as such at the controller) rather than by the sender. Most users won't want this, but it's useful for specialized use cases on hub-and-spoke networks and for low-power devices.
+    * Cryptographic performance improvements on several platforms.
+    * Multithreaded performance improvements throughout the code base, including the use of an inline lightweight spinlock for low-contention resources.
+ * Bugs fixed
+    * Disappearing routes on Mac (GitHub issue #600)
+    * Route flapping and path instability in some dual-stack V4/V6 networks
+    * Blacklist (in local.conf) doesn't work reliably (GitHub issue #656)
+    * Connection instabilities due to unsigned integer overflows in timing comparisons (use int64_t instead of uint64_t)
+    * Binaries don't run on some older or lower-end 32-bit ARM chips (build problem)
+    * ARM NEON crypto code crashes (build problem)
+    * Fixed some lock ordering issues revealed by "valgrind" tool
+    * The "zerotier-idtool" command could not be accessed from "zerotier-one" via command line switch
+    * Leaking sockets on some platforms when uPnP/NAT-PMP is enabled
+    * Fixed two very rare multithreading issues that were only observed on certain systems
+ * Platform-Specific Changes
+    * MacOS
+        * Installer now loads the kernel extension right away so that High Sierra users will see the prompt to authorize it. This is done in the "Security & Privacy" preference pane and must be done driectly on the console (not via remote desktop). On High Sierra and newer kexts must be authorized at the console via security settings system preferences pane.
+    * Windows
+        * The Windows installer should now install the driver without requiring a special prompt in most cases. This should make it easier for our packages to be accepted into and updated in the Chocolatey repository and should make it easier to perform remote installs across groups of machines using IT management and provisioning tools.
+        * The Windows official packages are now signed with an EV certificate (with hardware key).
+        * The Windows UI can now log into ZeroTier Central and join networks via the Central API.
+        * The `zerotier-idtool` command should now work on Windows without ugly hacks.
+        * Upgraded the installer version.
+        * Made a few changes to hopefully fix sporadic "will not uninstall" problems, though we cannot duplicate these issues ourselves.
+    * Linux
+        * Device names are now generated deterministically based on network IDs for all newly joined networks.
+    * Android
+        * Multicast now works on Android in most cases! Android apps can send and receive multicast and subscribe to multicast group IPs. Note that in some cases the app must bind to the specific correct interface for this to work.
+        * IPv6 can be disabled in UI for cases where it causes problems.
+
 # 2017-04-20 -- Version 1.2.4
 
  * Managed routes are now only bifurcated for the default route. This is a change in behavior, though few people will probably notice. Bifurcating all managed routes was causing more trouble than it was worth for most users.

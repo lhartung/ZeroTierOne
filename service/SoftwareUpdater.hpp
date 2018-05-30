@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_SOFTWAREUPDATER_HPP
@@ -25,11 +33,11 @@
 #include <vector>
 #include <map>
 #include <string>
+#include <array>
 
 #include "../include/ZeroTierOne.h"
 
 #include "../node/Identity.hpp"
-#include "../node/Array.hpp"
 #include "../node/Packet.hpp"
 
 #include "../ext/json/json.hpp"
@@ -159,7 +167,7 @@ public:
 	 *
 	 * @return True if we've downloaded and verified an update
 	 */
-	bool check(const uint64_t now);
+	bool check(const int64_t now);
 
 	/**
 	 * @return Meta-data for downloaded update or NULL if none
@@ -194,13 +202,13 @@ private:
 		nlohmann::json meta;
 		std::string bin;
 	};
-	std::map< Array<uint8_t,16>,_D > _dist; // key is first 16 bytes of hash
+	std::map< std::array<uint8_t,16>,_D > _dist; // key is first 16 bytes of hash
 
 	nlohmann::json _latestMeta;
 	bool _latestValid;
 
 	std::string _download;
-	Array<uint8_t,16> _downloadHashPrefix;
+	std::array<uint8_t,16> _downloadHashPrefix;
 	unsigned long _downloadLength;
 };
 

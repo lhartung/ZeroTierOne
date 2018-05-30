@@ -1,11 +1,27 @@
 Network Controller Microservice
 ======
 
-Every ZeroTier virtual network has a *network controller*. This is our reference implementation and is the same one we use to power our own hosted services at [my.zerotier.com](https://my.zerotier.com/). Network controllers act as configuration servers and certificate authorities for the members of networks. Controllers are located on the network by simply parsing out the first 10 digits of a network's 16-digit network ID: these are the address of the controller.
+Every ZeroTier virtual network has a *network controller* responsible for admitting members to the network, issuing certificates, and issuing default configuration information.
 
-As of ZeroTier One version 1.2.0 this code is included in normal builds for desktop, laptop, and server (Linux, etc.) targets, allowing any device to create virtual networks without having to be rebuilt from source with special flags to enable this feature. While this does offer a convenient way to create ad-hoc networks or experiment, we recommend running a dedicated controller somewhere secure and stable for any "serious" use case.
+This is our reference controller implementation and is the same one we use to power our own hosted services at [my.zerotier.com](https://my.zerotier.com/). As of ZeroTier One version 1.2.0 this code is included in normal builds for desktop, laptop, and server (Linux, etc.) targets.
 
 Controller data is stored in JSON format under `controller.d` in the ZeroTier working directory. It can be copied, rsync'd, placed in `git`, etc. The files under `controller.d` should not be modified in place while the controller is running or data loss may result, and if they are edited directly take care not to save corrupt JSON since that can also lead to data loss when the controller is restarted. Going through the API is strongly preferred to directly modifying these files.
+
+See the API section below for information about controlling the controller.
+
+### Scalability and Reliability
+
+Controllers can in theory host up to 2^24 networks and serve many millions of devices (or more), but we recommend spreading large numbers of networks across many controllers for load balancing and fault tolerance reasons. Since the controller uses the filesystem as its data store we recommend fast filesystems and fast SSD drives for heavily loaded controllers.
+
+Since ZeroTier nodes are mobile and do not need static IPs, implementing high availability fail-over for controllers is easy. Just replicate their working directories from master to backup and have something automatically fire up the backup if the master goes down. Modern orchestration tools like Nomad and Kubernetes can be of help here.
+
+### Dockerizing Controllers
+
+ZeroTier network controllers can easily be run in Docker or other container systems. Since containers do not need to actually join networks, extra privilege options like "--device=/dev/net/tun --privileged" are not needed. You'll just need to map the local JSON API port of the running controller and allow it to access the Internet (over UDP/9993 at a minimum) so things can reach and query it.
+
+### RethinkDB Database Implementation
+
+The default controller stores its data in the filesystem in `controller.d` under ZeroTier's home folder. There's an alternative implementation that stores data in RethinkDB that can be built with `make central-controller`. Right now this is only guaranteed to build and run on Linux and is designed for use with [ZeroTier Central](https://my.zerotier.com/). You're welcome to use it but we don't "officially" support it for end-user use and it could change at any time.
 
 ### Upgrading from Older (1.1.14 or earlier) Versions
 
@@ -17,27 +33,15 @@ The migration tool is written in nodeJS and can be used like this:
     npm install
     node migrate.js </path/to/controller.db> </path/to/controller.d>
 
-Very old versions of nodeJS may have issues. We tested it with version 7.
-
-### Scalability and Reliability
-
-Controllers can in theory host up to 2^24 networks and serve many millions of devices (or more), but we recommend spreading large numbers of networks across many controllers for load balancing and fault tolerance reasons. Since the controller uses the filesystem as its data store we recommend fast filesystems and fast SSD drives for heavily loaded controllers.
-
-Since ZeroTier nodes are mobile and do not need static IPs, implementing high availability fail-over for controllers is easy. Just replicate their working directories from master to backup and have something automatically fire up the backup if the master goes down. Many modern orchestration tools have built-in support for this. It would also be possible in theory to run controllers on a replicated or distributed filesystem, but we haven't tested this yet.
-
-### Dockerizing Controllers
-
-ZeroTier network controllers can easily be run in Docker or other container systems. Since containers do not need to actually join networks, extra privilege options like "--device=/dev/net/tun --privileged" are not needed. You'll just need to map the local JSON API port of the running controller and allow it to access the Internet (over UDP/9993 at a minimum) so things can reach and query it.
-
 ### Network Controller API
 
 The controller API is hosted via the same JSON API endpoint that ZeroTier One uses for local control (usually at 127.0.0.1 port 9993). All controller options are routed under the `/controller` base path.
 
-The controller microservice does not implement any fine-grained access control (authentication is via authtoken.secret just like the regular JSON API) or other complex mangement features. It just takes network and network member configurations and reponds to controller queries. We have an enterprise product called [ZeroTier Central](https://my.zerotier.com/) that we host as a service (and that companies can license to self-host) that does this.
+The controller microservice itself does not implement any fine-grained access control. Access control is via the ZeroTier control interface itself and `authtoken.secret`. This can be sent as the `X-ZT1-Auth` HTTP header field or appended to the URL as `?auth=<token>`. Take care when doing the latter that request URLs are not being logged.
 
-All working network IDs on a controller must begin with the controller's ZeroTier address. The API will *allow* "foreign" networks to be added but the controller will have no way of doing anything with them since nobody will know to query it. (In the future we might support secondaries, which would make this relevant.)
+While networks with any valid ID can be added to the controller's database, it will only actually work to control networks whose first 10 hex digits correspond with the network controller's ZeroTier ID. See [section 2.2.1 of the ZeroTier manual](https://zerotier.com/manual.shtml#2_2_1).
 
-The JSON API is *very* sensitive about types. Integers must be integers and strings strings, etc. Incorrectly typed and unrecognized fields may result in ignored fields or a 400 (bad request) error.
+The controller JSON API is *very* sensitive about types. Integers must be integers and strings strings, etc. Incorrect types may be ignored, set to default values, or set to undefined values.
 
 #### `/controller`
 
@@ -69,37 +73,39 @@ By making queries to this path you can create, configure, and delete networks. D
 
 When POSTing new networks take care that their IDs are not in use, otherwise you may overwrite an existing one. To create a new network with a random unused ID, POST to `/controller/network/##########______`. The #'s are the controller's 10-digit ZeroTier address and they're followed by six underscores. Check the `nwid` field of the returned JSON object for your network's newly allocated ID. Subsequent POSTs to this network must refer to its actual path.
 
+Example:
+
+`curl -X POST --header "X-ZT1-Auth: secret" -d '{"name":"my network"}' http://localhost:9993/controller/network/305f406058______`
+
+**Network object format:**
+
 | Field                 | Type          | Description                                       | Writable |
 | --------------------- | ------------- | ------------------------------------------------- | -------- |
 | id                    | string        | 16-digit network ID                               | no       |
-| nwid                  | string        | 16-digit network ID (old, but still around)       | no       |
-| clock                 | integer       | Current clock, ms since epoch                     | no       |
+| nwid                  | string        | 16-digit network ID (legacy)                      | no       |
+| objtype               | string        | Always "network"                                  | no       |
 | name                  | string        | A short name for this network                     | YES      |
+| creationTime          | integer       | Time network record was created (ms since epoch)  | no       |
 | private               | boolean       | Is access control enabled?                        | YES      |
 | enableBroadcast       | boolean       | Ethernet ff:ff:ff:ff:ff:ff allowed?               | YES      |
-| allowPassiveBridging  | boolean       | Allow any member to bridge (very experimental)    | YES      |
 | v4AssignMode          | object        | IPv4 management and assign options (see below)    | YES      |
 | v6AssignMode          | object        | IPv6 management and assign options (see below)    | YES      |
+| mtu                   | integer       | Network MTU (default: 2800)                       | YES      |
 | multicastLimit        | integer       | Maximum recipients for a multicast packet         | YES      |
 | creationTime          | integer       | Time network was first created                    | no       |
 | revision              | integer       | Network config revision counter                   | no       |
-| authorizedMemberCount | integer       | Number of authorized members (for private nets)   | no       |
-| activeMemberCount     | integer       | Number of members that appear to be online        | no       |
-| totalMemberCount      | integer       | Total known members of this network               | no       |
 | routes                | array[object] | Managed IPv4 and IPv6 routes; see below           | YES      |
 | ipAssignmentPools     | array[object] | IP auto-assign ranges; see below                  | YES      |
 | rules                 | array[object] | Traffic rules; see below                          | YES      |
-
-Recent changes:
-
- * The `ipLocalRoutes` field appeared in older versions but is no longer present. Routes will now show up in `routes`.
- * The `relays` field is gone since network preferred relays are gone. This capability is replaced by VL1 level federation ("federated roots").
-
-Other important points:
+| capabilities          | array[object] | Array of capability objects (see below)           | YES      |
+| tags                  | array[object] | Array of tag objects (see below)                  | YES      |
+| remoteTraceTarget     | string        | 10-digit ZeroTier ID of remote trace target       | YES      |
+| remoteTraceLevel      | integer       | Remote trace verbosity level                      | YES      |
 
  * Networks without rules won't carry any traffic. If you don't specify any on network creation an "accept anything" rule set will automatically be added.
  * Managed IP address assignments and IP assignment pools that do not fall within a route configured in `routes` are ignored and won't be used or sent to members.
  * The default for `private` is `true` and this is probably what you want. Turning `private` off means *anyone* can join your network with only its 16-digit network ID. It's also impossible to de-authorize a member as these networks don't issue or enforce certificates. Such "party line" networks are used for decentralized app backplanes, gaming, and testing but are otherwise not common.
+ * Changing the MTU can be disruptive and on some operating systems may require a leave/rejoin of the network or a restart of the ZeroTier service.
 
 **Auto-Assign Modes:**
 
@@ -185,7 +191,7 @@ The entry types and their additional fields are:
 | `MATCH_TAGS_SAMENESS`           | Match if both sides' tags differ by no more than value            | `id`,`value`   |
 | `MATCH_TAGS_BITWISE_AND`        | Match if both sides' tags AND to value                            | `id`,`value`   |
 | `MATCH_TAGS_BITWISE_OR`         | Match if both sides' tags OR to value                             | `id`,`value`   |
-| `MATCH_TAGS_BITWISE_XOR`        | Match if both sides` tags XOR to value                            | `id`,`value`   |
+| `MATCH_TAGS_BITWISE_XOR`        | Match if both sides' tags XOR to value                            | `id`,`value`   |
 
 Important notes about rules engine behavior:
 
@@ -221,28 +227,15 @@ This returns an object containing all currently online members and the most rece
 | id                    | string        | Member's 10-digit ZeroTier address                | no       |
 | address               | string        | Member's 10-digit ZeroTier address                | no       |
 | nwid                  | string        | 16-digit network ID                               | no       |
-| clock                 | integer       | Current clock, ms since epoch                     | no       |
 | authorized            | boolean       | Is member authorized? (for private networks)      | YES      |
-| authHistory           | array[object] | History of auth changes, latest at end            | no       |
 | activeBridge          | boolean       | Member is able to bridge to other Ethernet nets   | YES      |
 | identity              | string        | Member's public ZeroTier identity (if known)      | no       |
 | ipAssignments         | array[string] | Managed IP address assignments                    | YES      |
-| memberRevision        | integer       | Member revision counter                           | no       |
-| recentLog             | array[object] | Recent member activity log; see below             | no       |
+| revision              | integer       | Member revision counter                           | no       |
+| vMajor                | integer       | Most recently known major version                 | no       |
+| vMinor                | integer       | Most recently known minor version                 | no       |
+| vRev                  | integer       | Most recently known revision                      | no       |
+| vProto                | integer       | Most recently known protocl version               | no       |
 
 Note that managed IP assignments are only used if they fall within a managed route. Otherwise they are ignored.
 
-**Recent log object format:**
-
-| Field                 | Type          | Description                                       |
-| --------------------- | ------------- | ------------------------------------------------- |
-| ts                    | integer       | Time of request, ms since epoch                   |
-| auth                  | boolean       | Was member authorized?                            |
-| authBy                | string        | How was member authorized?                        |
-| vMajor                | integer       | Client major version or -1 if unknown             |
-| vMinor                | integer       | Client minor version or -1 if unknown             |
-| vRev                  | integer       | Client revision or -1 if unknown                  |
-| vProto                | integer       | ZeroTier protocol version reported by client      |
-| fromAddr              | string        | Physical address if known                         |
-
-The controller can only know a member's `fromAddr` if it's able to establish a direct path to it. Members behind very restrictive firewalls may not have this information since the controller will be receiving the member's requests by way of a relay. ZeroTier does not back-trace IP paths as packets are relayed since this would add a lot of protocol overhead.

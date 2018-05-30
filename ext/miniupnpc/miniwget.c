@@ -1,8 +1,8 @@
-/* $Id: miniwget.c,v 1.76 2016/12/16 08:54:04 nanard Exp $ */
+/* $Id: miniwget.c,v 1.77 2017/05/09 10:04:57 nanard Exp $ */
 /* Project : miniupnp
  * Website : http://miniupnp.free.fr/
  * Author : Thomas Bernard
- * Copyright (c) 2005-2016 Thomas Bernard
+ * Copyright (c) 2005-2017 Thomas Bernard
  * This software is subject to the conditions detailed in the
  * LICENCE file provided in this distribution. */
 
@@ -48,9 +48,14 @@
 #define MIN(x,y) (((x)<(y))?(x):(y))
 #endif /* MIN */
 
-
 #ifdef _WIN32
 #define OS_STRING "Win32"
+#define MINIUPNPC_VERSION_STRING "2.0"
+#define UPNP_VERSION_STRING "UPnP/1.1"
+#endif
+
+#ifdef __ANDROID__
+#define OS_STRING "Android"
 #define MINIUPNPC_VERSION_STRING "2.0"
 #define UPNP_VERSION_STRING "UPnP/1.1"
 #endif
@@ -116,7 +121,7 @@ getHTTPResponse(int s, int * size, int * status_code)
 	chunksize_buf[0] = '\0';
 	chunksize_buf_index = 0;
 
-	while((n = receivedata(s, buf, 2048, 5000, NULL)) > 0)
+	while((n = receivedata(s, buf, sizeof(buf), 5000, NULL)) > 0)
 	{
 		if(endofheaders == 0)
 		{
@@ -289,11 +294,12 @@ getHTTPResponse(int s, int * size, int * status_code)
 							goto end_of_stream;
 						}
 					}
-					bytestocopy = ((int)chunksize < (n - i))?chunksize:(unsigned int)(n - i);
+					/* it is guaranteed that (n >= i) */
+					bytestocopy = (chunksize < (unsigned int)(n - i))?chunksize:(unsigned int)(n - i);
 					if((content_buf_used + bytestocopy) > content_buf_len)
 					{
 						char * tmp;
-						if(content_length >= (int)(content_buf_used + bytestocopy)) {
+						if((content_length >= 0) && ((unsigned int)content_length >= (content_buf_used + bytestocopy))) {
 							content_buf_len = content_length;
 						} else {
 							content_buf_len = content_buf_used + bytestocopy;
@@ -318,14 +324,15 @@ getHTTPResponse(int s, int * size, int * status_code)
 			{
 				/* not chunked */
 				if(content_length > 0
-				   && (int)(content_buf_used + n) > content_length) {
+				   && (content_buf_used + n) > (unsigned int)content_length) {
 					/* skipping additional bytes */
 					n = content_length - content_buf_used;
 				}
 				if(content_buf_used + n > content_buf_len)
 				{
 					char * tmp;
-					if(content_length >= (int)(content_buf_used + n)) {
+					if(content_length >= 0
+					   && (unsigned int)content_length >= (content_buf_used + n)) {
 						content_buf_len = content_length;
 					} else {
 						content_buf_len = content_buf_used + n;
@@ -345,7 +352,7 @@ getHTTPResponse(int s, int * size, int * status_code)
 			}
 		}
 		/* use the Content-Length header value if available */
-		if(content_length > 0 && (int)content_buf_used >= content_length)
+		if(content_length > 0 && content_buf_used >= (unsigned int)content_length)
 		{
 #ifdef DEBUG
 			printf("End of HTTP content\n");

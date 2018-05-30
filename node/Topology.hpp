@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -14,6 +14,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_TOPOLOGY_HPP
@@ -38,7 +46,6 @@
 #include "InetAddress.hpp"
 #include "Hashtable.hpp"
 #include "World.hpp"
-#include "CertificateOfRepresentation.hpp"
 
 namespace ZeroTier {
 
@@ -51,6 +58,7 @@ class Topology
 {
 public:
 	Topology(const RuntimeEnvironment *renv,void *tPtr);
+	~Topology();
 
 	/**
 	 * Add a peer to database
@@ -74,6 +82,13 @@ public:
 	SharedPtr<Peer> getPeer(void *tPtr,const Address &zta);
 
 	/**
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
+	 * @param zta ZeroTier address of peer
+	 * @return Identity or NULL identity if not found
+	 */
+	Identity getIdentity(void *tPtr,const Address &zta);
+
+	/**
 	 * Get a peer only if it is presently in memory (no disk cache)
 	 *
 	 * This also does not update the lastUsed() time for peers, which means
@@ -95,55 +110,25 @@ public:
 	/**
 	 * Get a Path object for a given local and remote physical address, creating if needed
 	 *
-	 * @param l Local address or NULL for 'any' or 'wildcard'
+	 * @param l Local socket
 	 * @param r Remote address
 	 * @return Pointer to canonicalized Path object
 	 */
-	inline SharedPtr<Path> getPath(const InetAddress &l,const InetAddress &r)
+	inline SharedPtr<Path> getPath(const int64_t l,const InetAddress &r)
 	{
 		Mutex::Lock _l(_paths_m);
 		SharedPtr<Path> &p = _paths[Path::HashKey(l,r)];
 		if (!p)
-			p.setToUnsafe(new Path(l,r));
+			p.set(new Path(l,r));
 		return p;
 	}
 
 	/**
-	 * Get the identity of a peer
-	 *
-	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
-	 * @param zta ZeroTier address of peer
-	 * @return Identity or NULL Identity if not found
-	 */
-	Identity getIdentity(void *tPtr,const Address &zta);
-
-	/**
-	 * Cache an identity
-	 *
-	 * This is done automatically on addPeer(), and so is only useful for
-	 * cluster identity replication.
-	 *
-	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
-	 * @param id Identity to cache
-	 */
-	void saveIdentity(void *tPtr,const Identity &id);
-
-	/**
 	 * Get the current best upstream peer
 	 *
-	 * @return Root server with lowest latency or NULL if none
+	 * @return Upstream or NULL if none available
 	 */
-	inline SharedPtr<Peer> getUpstreamPeer() { return getUpstreamPeer((const Address *)0,0,false); }
-
-	/**
-	 * Get the current best upstream peer, avoiding those in the supplied avoid list
-	 *
-	 * @param avoid Nodes to avoid
-	 * @param avoidCount Number of nodes to avoid
-	 * @param strictAvoid If false, consider avoided root servers anyway if no non-avoid root servers are available
-	 * @return Root server or NULL if none available
-	 */
-	SharedPtr<Peer> getUpstreamPeer(const Address *avoid,unsigned int avoidCount,bool strictAvoid);
+	SharedPtr<Peer> getUpstreamPeer();
 
 	/**
 	 * @param id Identity to check
@@ -300,13 +285,13 @@ public:
 	/**
 	 * Clean and flush database
 	 */
-	void clean(uint64_t now);
+	void doPeriodicTasks(void *tPtr,int64_t now);
 
 	/**
 	 * @param now Current time
 	 * @return Number of peers with active direct paths
 	 */
-	inline unsigned long countActive(uint64_t now) const
+	inline unsigned long countActive(int64_t now) const
 	{
 		unsigned long cnt = 0;
 		Mutex::Lock _l(_peers_m);
@@ -315,7 +300,7 @@ public:
 		SharedPtr<Peer> *p = (SharedPtr<Peer> *)0;
 		while (i.next(a,p)) {
 			const SharedPtr<Path> pp((*p)->getBestPath(now,false));
-			if ((pp)&&(pp->alive(now)))
+			if (pp)
 				++cnt;
 		}
 		return cnt;
@@ -335,12 +320,6 @@ public:
 		Address *a = (Address *)0;
 		SharedPtr<Peer> *p = (SharedPtr<Peer> *)0;
 		while (i.next(a,p)) {
-#ifdef ZT_TRACE
-			if (!(*p)) {
-				fprintf(stderr,"FATAL BUG: eachPeer() caught NULL peer for %s -- peer pointers in Topology should NEVER be NULL" ZT_EOL_S,a->toString().c_str());
-				abort();
-			}
-#endif
 			f(*this,*((const SharedPtr<Peer> *)p));
 		}
 	}
@@ -357,7 +336,42 @@ public:
 	/**
 	 * @return True if I am a root server in a planet or moon
 	 */
-	inline bool amRoot() const { return _amRoot; }
+	inline bool amUpstream() const { return _amUpstream; }
+
+	/**
+	 * Get info about a path
+	 *
+	 * The supplied result variables are not modified if no special config info is found.
+	 *
+	 * @param physicalAddress Physical endpoint address
+	 * @param mtu Variable set to MTU
+	 * @param trustedPathId Variable set to trusted path ID
+	 */
+	inline void getOutboundPathInfo(const InetAddress &physicalAddress,unsigned int &mtu,uint64_t &trustedPathId)
+	{
+		for(unsigned int i=0,j=_numConfiguredPhysicalPaths;i<j;++i) {
+			if (_physicalPathConfig[i].first.containsAddress(physicalAddress)) {
+				trustedPathId = _physicalPathConfig[i].second.trustedPathId;
+				mtu = _physicalPathConfig[i].second.mtu;
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Get the payload MTU for an outbound physical path (returns default if not configured)
+	 *
+	 * @param physicalAddress Physical endpoint address
+	 * @return MTU
+	 */
+	inline unsigned int getOutboundPathMtu(const InetAddress &physicalAddress)
+	{
+		for(unsigned int i=0,j=_numConfiguredPhysicalPaths;i<j;++i) {
+			if (_physicalPathConfig[i].first.containsAddress(physicalAddress))
+				return _physicalPathConfig[i].second.mtu;
+		}
+		return ZT_DEFAULT_PHYSMTU;
+	}
 
 	/**
 	 * Get the outbound trusted path ID for a physical address, or 0 if none
@@ -367,9 +381,9 @@ public:
 	 */
 	inline uint64_t getOutboundPathTrust(const InetAddress &physicalAddress)
 	{
-		for(unsigned int i=0;i<_trustedPathCount;++i) {
-			if (_trustedPathNetworks[i].containsAddress(physicalAddress))
-				return _trustedPathIds[i];
+		for(unsigned int i=0,j=_numConfiguredPhysicalPaths;i<j;++i) {
+			if (_physicalPathConfig[i].first.containsAddress(physicalAddress))
+				return _physicalPathConfig[i].second.trustedPathId;
 		}
 		return 0;
 	}
@@ -382,61 +396,59 @@ public:
 	 */
 	inline bool shouldInboundPathBeTrusted(const InetAddress &physicalAddress,const uint64_t trustedPathId)
 	{
-		for(unsigned int i=0;i<_trustedPathCount;++i) {
-			if ((_trustedPathIds[i] == trustedPathId)&&(_trustedPathNetworks[i].containsAddress(physicalAddress)))
+		for(unsigned int i=0,j=_numConfiguredPhysicalPaths;i<j;++i) {
+			if ((_physicalPathConfig[i].second.trustedPathId == trustedPathId)&&(_physicalPathConfig[i].first.containsAddress(physicalAddress)))
 				return true;
 		}
 		return false;
 	}
 
 	/**
-	 * Set trusted paths in this topology
-	 *
-	 * @param networks Array of networks (prefix/netmask bits)
-	 * @param ids Array of trusted path IDs
-	 * @param count Number of trusted paths (if larger than ZT_MAX_TRUSTED_PATHS overflow is ignored)
+	 * Set or clear physical path configuration (called via Node::setPhysicalPathConfiguration)
 	 */
-	inline void setTrustedPaths(const InetAddress *networks,const uint64_t *ids,unsigned int count)
+	inline void setPhysicalPathConfiguration(const struct sockaddr_storage *pathNetwork,const ZT_PhysicalPathConfiguration *pathConfig)
 	{
-		if (count > ZT_MAX_TRUSTED_PATHS)
-			count = ZT_MAX_TRUSTED_PATHS;
-		Mutex::Lock _l(_trustedPaths_m);
-		for(unsigned int i=0;i<count;++i) {
-			_trustedPathIds[i] = ids[i];
-			_trustedPathNetworks[i] = networks[i];
+		if (!pathNetwork) {
+			_numConfiguredPhysicalPaths = 0;
+		} else {
+			std::map<InetAddress,ZT_PhysicalPathConfiguration> cpaths;
+			for(unsigned int i=0,j=_numConfiguredPhysicalPaths;i<j;++i)
+				cpaths[_physicalPathConfig[i].first] = _physicalPathConfig[i].second;
+
+			if (pathConfig) {
+				ZT_PhysicalPathConfiguration pc(*pathConfig);
+
+				if (pc.mtu <= 0)
+					pc.mtu = ZT_DEFAULT_PHYSMTU;
+				else if (pc.mtu < ZT_MIN_PHYSMTU)
+					pc.mtu = ZT_MIN_PHYSMTU;
+				else if (pc.mtu > ZT_MAX_PHYSMTU)
+					pc.mtu = ZT_MAX_PHYSMTU;
+
+				cpaths[*(reinterpret_cast<const InetAddress *>(pathNetwork))] = pc;
+			} else {
+				cpaths.erase(*(reinterpret_cast<const InetAddress *>(pathNetwork)));
+			}
+
+			unsigned int cnt = 0;
+			for(std::map<InetAddress,ZT_PhysicalPathConfiguration>::const_iterator i(cpaths.begin());((i!=cpaths.end())&&(cnt<ZT_MAX_CONFIGURABLE_PATHS));++i) {
+				_physicalPathConfig[cnt].first = i->first;
+				_physicalPathConfig[cnt].second = i->second;
+				++cnt;
+			}
+			_numConfiguredPhysicalPaths = cnt;
 		}
-		_trustedPathCount = count;
-	}
-
-	/**
-	 * @return Current certificate of representation (copy)
-	 */
-	inline CertificateOfRepresentation certificateOfRepresentation() const
-	{
-		Mutex::Lock _l(_upstreams_m);
-		return _cor;
-	}
-
-	/**
-	 * @param buf Buffer to receive COR
-	 */
-	template<unsigned int C>
-	void appendCertificateOfRepresentation(Buffer<C> &buf)
-	{
-		Mutex::Lock _l(_upstreams_m);
-		_cor.serialize(buf);
 	}
 
 private:
 	Identity _getIdentity(void *tPtr,const Address &zta);
 	void _memoizeUpstreams(void *tPtr);
+	void _savePeer(void *tPtr,const SharedPtr<Peer> &peer);
 
 	const RuntimeEnvironment *const RR;
 
-	uint64_t _trustedPathIds[ZT_MAX_TRUSTED_PATHS];
-	InetAddress _trustedPathNetworks[ZT_MAX_TRUSTED_PATHS];
-	unsigned int _trustedPathCount;
-	Mutex _trustedPaths_m;
+	std::pair<InetAddress,ZT_PhysicalPathConfiguration> _physicalPathConfig[ZT_MAX_CONFIGURABLE_PATHS];
+	volatile unsigned int _numConfiguredPhysicalPaths;
 
 	Hashtable< Address,SharedPtr<Peer> > _peers;
 	Mutex _peers_m;
@@ -448,8 +460,7 @@ private:
 	std::vector<World> _moons;
 	std::vector< std::pair<uint64_t,Address> > _moonSeeds;
 	std::vector<Address> _upstreamAddresses;
-	CertificateOfRepresentation _cor;
-	bool _amRoot;
+	bool _amUpstream;
 	Mutex _upstreams_m; // locks worlds, upstream info, moon info, etc.
 };
 
