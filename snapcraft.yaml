@@ -13,12 +13,6 @@ description: |
 confinement: strict
 grade: stable
 
-slots:
-  zerotier-control:
-    interface: content
-    read:
-      - $SNAP_COMMON
-
 apps:
   zerotier-one:
     command: zerotier-one
@@ -38,6 +32,14 @@ apps:
     plugs:
       - network
 
+# snapcraft 2.36 does not support the top-level layout section yet,
+# so enclose it in a passthrough object. When snapcraft 3.0 becomes
+# available, we can move layout out of the passthrough section.
+passthrough:
+  layout:
+    /var/lib/zerotier-one:
+      bind: $SNAP_COMMON
+
 parts:
   zerotier-one:
     plugin: make
@@ -47,10 +49,6 @@ parts:
       - libc++-dev
     make-parameters:
       - CXX=g++
-    override-build: |
-      # Patch the default home directory to work nicely with the snap filesystem.
-      sed "s:/var/lib/zerotier-one:/var/snap/zerotier-one/common:" -i osdep/OSUtils.cpp
-      snapcraftctl build
     filesets:
       binaries:
         - usr/sbin/zerotier-one
@@ -58,3 +56,9 @@ parts:
         - usr/sbin/zerotier-idtool
     prime:
       - $binaries
+
+slots:
+  zerotier-control:
+    interface: content
+    read:
+      - $SNAP_COMMON
