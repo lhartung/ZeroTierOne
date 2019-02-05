@@ -96,6 +96,24 @@ Running ZeroTier One on a Mac is the same, but OSX requires a kernel extension. 
 
 This will create the home folder for Mac, place *tap.kext* there, and set its modes correctly to enable ZeroTier One to manage it with *kextload* and *kextunload*.
 
+#### Snap Edition Notes
+
+Installing is a very simple command on any system already running snapd:
+
+    sudo snap install zerotier-one
+    
+Depending on your install (core vs. not) it will reboot on finish.
+
+After the installation is complete we will need to run some manual commands:
+
+    sudo snap connect zerotier-one:network-control
+    sudo zerotier-one.zerotier-cli join 8056c2e21c000001
+    sudo zerotier-one.zerotier-cli status
+
+Approve your new node in ZeroTier Central! Welcome online!
+
+Note the snap connect command is necessary or you will be unable use the /dev/tun needed for the connection.
+
 ### Troubleshooting
 
 For most users, it just works.
