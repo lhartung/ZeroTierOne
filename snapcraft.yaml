@@ -15,7 +15,10 @@ grade: stable
 
 apps:
   zerotier-one:
-    command: zerotier-one
+    # Add -U to prevent attempting to drop privileges since snaps have their
+    # own containment mechanism. Otherwise, if a user named "zerotier-one"
+    # exists on the system, the setgid or related calls will fail.
+    command: zerotier-one -U
     daemon: simple
     plugs:
       - network
