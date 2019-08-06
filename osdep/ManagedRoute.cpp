@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  * --
  *
@@ -46,7 +46,9 @@
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#ifndef ZT_SDK
 #include <net/route.h>
+#endif
 #include <net/if.h>
 #ifdef __BSD__
 #include <net/if_dl.h>
@@ -109,6 +111,7 @@ struct _RTE
 #ifdef __BSD__ // ------------------------------------------------------------
 #define ZT_ROUTING_SUPPORT_FOUND 1
 
+#ifndef ZT_SDK
 static std::vector<_RTE> _getRTEs(const InetAddress &target,bool contains)
 {
 	std::vector<_RTE> rtes;
@@ -243,6 +246,7 @@ static std::vector<_RTE> _getRTEs(const InetAddress &target,bool contains)
 
 	return rtes;
 }
+#endif
 
 static void _routeCmd(const char *op,const InetAddress &target,const InetAddress &via,const char *ifscope,const char *localInterface)
 {
@@ -409,6 +413,7 @@ static bool _winHasRoute(const NET_LUID &interfaceLuid, const NET_IFINDEX &inter
  * Linux default route override implies asymmetric routes, which then
  * trigger Linux's "martian packet" filter. */
 
+#ifndef ZT_SDK
 bool ManagedRoute::sync()
 {
 #ifdef __WINDOWS__
@@ -519,6 +524,7 @@ bool ManagedRoute::sync()
 
 	return true;
 }
+#endif
 
 void ManagedRoute::remove()
 {

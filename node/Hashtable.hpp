@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  * --
  *
@@ -398,6 +398,10 @@ private:
 	static inline unsigned long _hc(const uint16_t i)
 	{
 		return ((unsigned long)i * (unsigned long)0x9e3779b1);
+	}
+	static inline unsigned long _hc(const int i)
+	{
+		return ((unsigned long)i * (unsigned long)0x9e3379b1);
 	}
 
 	inline void _grow()
