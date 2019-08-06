@@ -1,5 +1,4 @@
 name: zerotier-one
-version: 1.4.0.1
 summary: ZeroTier is a software-based managed Ethernet switch for planet Earth.
 description: |
   ZeroTier is a software-based managed Ethernet switch for planet Earth.
@@ -10,6 +9,7 @@ description: |
 
   Visit ZeroTier's site for more information and pre-built binary packages. Apps for Android and iOS are available for free in the Google Play and Apple app stores.
 
+adopt-info: zerotier-one
 confinement: strict
 grade: stable
 
@@ -59,6 +59,11 @@ parts:
         - usr/sbin/zerotier-idtool
     prime:
       - $binaries
+    override-build: |
+      snapcraftctl build
+
+      # Grab the version string from the newly-compiled binary.
+      snapcraftctl set-version "$(./zerotier-one -v)"
 
 slots:
   zerotier-control:
