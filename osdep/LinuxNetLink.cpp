@@ -1,28 +1,19 @@
 /*
- * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (c)2019 ZeroTier, Inc.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Use of this software is governed by the Business Source License included
+ * in the LICENSE.TXT file in the project's root directory.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Change Date: 2023-01-01
  *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- * --
- *
- * You can be released from the requirements of the license by purchasing
- * a commercial license. Buying such a license is mandatory as soon as you
- * develop commercial closed-source software that incorporates or links
- * directly against ZeroTier software without disclosing the source code
- * of your own application.
+ * On the date above, in accordance with the Business Source License, use
+ * of this software will be governed by version 2.0 of the Apache License.
  */
+/****/
+
+#include "../node/Constants.hpp"
+
+#ifdef __LINUX__
 
 #include "LinuxNetLink.hpp"
 
@@ -66,7 +57,7 @@ LinuxNetLink::LinuxNetLink()
 	_setSocketTimeout(_fd, 1);
 
 	_la.nl_family = AF_NETLINK;
-	_la.nl_pid = getpid()+1;
+	_la.nl_pid = 0; //getpid()+1;
 	_la.nl_groups = RTMGRP_LINK|RTMGRP_IPV4_IFADDR|RTMGRP_IPV6_IFADDR|RTMGRP_IPV4_ROUTE|RTMGRP_IPV6_ROUTE|RTMGRP_NOTIFY;
 	if (bind(_fd, (struct sockaddr*)&_la, sizeof(_la))) {
 		fprintf(stderr, "Error connecting to RTNETLINK: %s\n", strerror(errno));
@@ -88,7 +79,7 @@ LinuxNetLink::~LinuxNetLink()
 	::close(_fd);
 }
 
-void LinuxNetLink::_setSocketTimeout(int fd, int seconds) 
+void LinuxNetLink::_setSocketTimeout(int fd, int seconds)
 {
 	struct timeval tv;
 	tv.tv_sec = seconds;
@@ -103,7 +94,11 @@ void LinuxNetLink::_setSocketTimeout(int fd, int seconds)
 #define ZT_NL_BUF_SIZE 16384
 int LinuxNetLink::_doRecv(int fd)
 {
-	char *const buf = (char *)valloc(ZT_NL_BUF_SIZE);
+	char *buf = nullptr;
+	if (posix_memalign((void **)&buf,16,ZT_NL_BUF_SIZE) != 0) {
+		fprintf(stderr,"malloc failed!\n");
+		::exit(1);
+	}
 	if (!buf) {
 		fprintf(stderr,"malloc failed!\n");
 		::exit(1);
@@ -157,7 +152,7 @@ int LinuxNetLink::_doRecv(int fd)
 				nll = 0;
 				break;
 			}
-			
+
 			nll += rtn;
 
 			_processMessage(nlp, nll);
@@ -192,7 +187,7 @@ void LinuxNetLink::_processMessage(struct nlmsghdr *nlp, int nll)
 {
 	for(; NLMSG_OK(nlp, nll); nlp=NLMSG_NEXT(nlp, nll))
 	{
-		switch(nlp->nlmsg_type) 
+		switch(nlp->nlmsg_type)
 		{
 		case RTM_NEWLINK:
 			_linkAdded(nlp);
@@ -228,7 +223,7 @@ void LinuxNetLink::_ipAddressAdded(struct nlmsghdr *nlp)
 	char local[40] = {0};
 	char label[40] = {0};
 	char bcast[40] = {0};
-	
+
 	for(;RTA_OK(rtap, ifal); rtap=RTA_NEXT(rtap,ifal))
 	{
 		switch(rtap->rta_type) {
@@ -442,7 +437,7 @@ void LinuxNetLink::_requestIPv4Routes()
 
 	struct sockaddr_nl la;
 	la.nl_family = AF_NETLINK;
-	la.nl_pid = getpid();
+	la.nl_pid = 0; //getpid();
 	la.nl_groups = RTMGRP_IPV4_ROUTE;
 	if(bind(fd, (struct sockaddr*)&la, sizeof(la))) {
 		fprintf(stderr, "Error binding RTNETLINK (_requiestIPv4Routes #1): %s\n", strerror(errno));
@@ -495,7 +490,7 @@ void LinuxNetLink::_requestIPv6Routes()
 
 	struct sockaddr_nl la;
 	la.nl_family = AF_NETLINK;
-	la.nl_pid = getpid();
+	la.nl_pid = 0; //getpid();
 	la.nl_groups = RTMGRP_IPV6_ROUTE;
 	if(bind(fd, (struct sockaddr*)&la, sizeof(struct sockaddr_nl))) {
 		fprintf(stderr, "Error binding RTNETLINK (_requestIPv6Routes #1): %s\n", strerror(errno));
@@ -548,7 +543,7 @@ void LinuxNetLink::_requestInterfaceList()
 
 	struct sockaddr_nl la;
 	la.nl_family = AF_NETLINK;
-	la.nl_pid = getpid();
+	la.nl_pid = 0; //getpid();
 	la.nl_groups = RTMGRP_LINK;
 	if(bind(fd, (struct sockaddr*)&la, sizeof(struct sockaddr_nl))) {
 		fprintf(stderr, "Error binding RTNETLINK (_requestInterfaceList #1): %s\n", strerror(errno));
@@ -602,7 +597,7 @@ void LinuxNetLink::addRoute(const InetAddress &target, const InetAddress &via, c
 	struct sockaddr_nl la;
 	bzero(&la, sizeof(la));
 	la.nl_family = AF_NETLINK;
-	la.nl_pid = getpid();
+	la.nl_pid = 0; //getpid();
 
 	if(bind(fd, (struct sockaddr*)&la, sizeof(struct sockaddr_nl))) {
 		fprintf(stderr, "Error binding RTNETLINK (addRoute #1): %s\n", strerror(errno));
@@ -649,7 +644,7 @@ void LinuxNetLink::addRoute(const InetAddress &target, const InetAddress &via, c
 		if(src.isV4()) {
 			rtap->rta_len = RTA_LENGTH(sizeof(struct in_addr));
 			memcpy(RTA_DATA(rtap), &((struct sockaddr_in*)&src)->sin_addr, sizeof(struct in_addr));
-			
+
 		} else {
 			rtap->rta_len = RTA_LENGTH(sizeof(struct in6_addr));
 			memcpy(RTA_DATA(rtap), &((struct sockaddr_in6*)&src)->sin6_addr, sizeof(struct in6_addr));
@@ -717,7 +712,7 @@ void LinuxNetLink::delRoute(const InetAddress &target, const InetAddress &via, c
 
 	struct sockaddr_nl la;
 	la.nl_family = AF_NETLINK;
-	la.nl_pid = getpid();
+	la.nl_pid = 0; //getpid();
 
 	if(bind(fd, (struct sockaddr*)&la, sizeof(struct sockaddr_nl))) {
 		fprintf(stderr, "Error binding RTNETLINK (delRoute #1): %s\n", strerror(errno));
@@ -764,7 +759,7 @@ void LinuxNetLink::delRoute(const InetAddress &target, const InetAddress &via, c
 		if(src.isV4()) {
 			rtap->rta_len = RTA_LENGTH(sizeof(struct in_addr));
 			memcpy(RTA_DATA(rtap), &((struct sockaddr_in*)&src)->sin_addr, sizeof(struct in_addr));
-			
+
 		} else {
 			rtap->rta_len = RTA_LENGTH(sizeof(struct in6_addr));
 			memcpy(RTA_DATA(rtap), &((struct sockaddr_in6*)&src)->sin6_addr, sizeof(struct in6_addr));
@@ -831,7 +826,7 @@ void LinuxNetLink::addAddress(const InetAddress &addr, const char *iface)
 	struct sockaddr_nl la;
 	memset(&la,0,sizeof(la));
 	la.nl_family = AF_NETLINK;
-	la.nl_pid = getpid();
+	la.nl_pid = 0; //getpid();
 	if (addr.isV4()) {
 		la.nl_groups = RTMGRP_IPV4_IFADDR;
 	} else {
@@ -860,7 +855,7 @@ void LinuxNetLink::addAddress(const InetAddress &addr, const char *iface)
 		close(fd);
 		return;
 	}
-	
+
 	int rtl = sizeof(struct ifaddrmsg);
 	struct nl_adr_req req;
 	bzero(&req, sizeof(struct nl_adr_req));
@@ -948,7 +943,7 @@ void LinuxNetLink::removeAddress(const InetAddress &addr, const char *iface)
 
 	struct sockaddr_nl la;
 	la.nl_family = AF_NETLINK;
-	la.nl_pid = getpid();
+	la.nl_pid = 0; //getpid();
 	if (addr.isV4()) {
 		la.nl_groups = RTMGRP_IPV4_IFADDR;
 	} else {
@@ -972,7 +967,7 @@ void LinuxNetLink::removeAddress(const InetAddress &addr, const char *iface)
 		close(fd);
 		return;
 	}
-	
+
 	int rtl = sizeof(struct ifaddrmsg);
 	struct nl_adr_req req;
 	bzero(&req, sizeof(struct nl_adr_req));
@@ -1048,7 +1043,7 @@ void LinuxNetLink::removeAddress(const InetAddress &addr, const char *iface)
 	close(fd);
 }
 
-RouteList LinuxNetLink::getIPV4Routes() const 
+RouteList LinuxNetLink::getIPV4Routes() const
 {
 	return _routes_ipv4;
 }
@@ -1075,3 +1070,5 @@ int LinuxNetLink::_indexForInterface(const char *iface)
 }
 
 } // namespace ZeroTier
+
+#endif
