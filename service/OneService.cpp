@@ -1353,8 +1353,8 @@ public:
 							if (j.is_object()) {
 								seed = Utils::hexStrToU64(OSUtils::jsonString(j["seed"],"0").c_str());
 							}
+						} catch (std::exception &exc) {
 						} catch ( ... ) {
-							// discard invalid JSON
 						}
 
 						std::vector<World> moons(_node->moons());
@@ -1403,8 +1403,8 @@ public:
 											json &allowDefault = j["allowDefault"];
 											if (allowDefault.is_boolean()) localSettings.allowDefault = (bool)allowDefault;
 										}
+									} catch (std::exception &exc) {
 									} catch ( ... ) {
-										// discard invalid JSON
 									}
 
 									setNetworkSettings(nws->networks[i].nwid,localSettings);
@@ -1715,8 +1715,9 @@ public:
 				}
 			}
 #ifdef __SYNOLOGY__
-			if (!n.tap->addIpSyn(newManagedIps))
+			if (!n.tap->addIps(newManagedIps)) {
 				fprintf(stderr,"ERROR: unable to add ip addresses to ifcfg" ZT_EOL_S);
+			}
 #else
 			for(std::vector<InetAddress>::iterator ip(newManagedIps.begin());ip!=newManagedIps.end();++ip) {
 				if (std::find(n.managedIps.begin(),n.managedIps.end(),*ip) == n.managedIps.end()) {
@@ -2034,6 +2035,8 @@ public:
 					return;
 
 			}
+		} catch (std::exception &exc) {
+			_phy.close(sock);
 		} catch ( ... ) {
 			_phy.close(sock);
 		}
@@ -2141,6 +2144,8 @@ public:
 						fprintf(stderr,"ERROR: unable to configure virtual network port: %s" ZT_EOL_S,exc.what());
 #endif
 						_nets.erase(nwid);
+						return -999;
+					} catch (int exc) {
 						return -999;
 					} catch ( ... ) {
 						return -999; // tap init failed

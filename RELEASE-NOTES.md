@@ -1,6 +1,15 @@
 ZeroTier Release Notes
 ======
 
+# 2019-08-30 -- Version 1.4.6
+
+ * Update default root list to latest
+ * ARM32 platform build and flag fixes
+ * Add a clarification line to LICENSE.txt
+ * Fix license message in CLI
+ * Windows service now looks for service command line arguments
+ * Fixed a bug that could cause excessive queued multicasts
+
 # 2019-08-23 -- Version 1.4.4
 
  * Change license from GPL3 to BSL 1.1, see LICENSE.txt

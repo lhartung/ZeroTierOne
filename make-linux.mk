@@ -1,4 +1,4 @@
-# Automagically pick clang or gcc, with preference for clang
+# Automagically pick CLANG or RH/CentOS newer GCC if present
 # This is only done if we have not overridden these with an environment or CLI variable
 ifeq ($(origin CC),default)
         CC:=$(shell if [ -e /usr/bin/clang ]; then echo clang; else echo gcc; fi)
@@ -17,9 +17,6 @@ DESTDIR?=
 include objects.mk
 ONE_OBJS+=osdep/LinuxEthernetTap.o
 ONE_OBJS+=osdep/LinuxNetLink.o
-
-NLTEST_OBJS+=osdep/LinuxNetLink.o node/InetAddress.o node/Utils.o node/Salsa20.o
-NLTEST_OBJS+=nltest.o
 
 # for central controller builds
 TIMESTAMP=$(shell date +"%Y%m%d%H%M")
@@ -267,8 +264,8 @@ ifeq ($(ZT_ARCHITECTURE),3)
 		override CXXFLAGS+=-march=armv5 -mfloat-abi=soft -msoft-float -mno-unaligned-access -marm
 		ZT_USE_ARM32_NEON_ASM_CRYPTO=0
 	else
-		override CFLAGS+=-march=armv5 -mno-unaligned-access -marm
-		override CXXFLAGS+=-march=armv5 -mno-unaligned-access -marm
+		override CFLAGS+=-march=armv5 -mno-unaligned-access -marm -fexceptions
+		override CXXFLAGS+=-march=armv5 -mno-unaligned-access -marm -fexceptions
 		ZT_USE_ARM32_NEON_ASM_CRYPTO=0
 	endif
 endif
@@ -332,8 +329,7 @@ official:	FORCE
 	make -j4 ZT_OFFICIAL=1 all
 
 docker:	FORCE
-	make clean ; make -j4 one
-	docker build -f docker/Dockerfile .
+	docker build -f ext/installfiles/linux/zerotier-containerized/Dockerfile -t zerotier-containerized .
 
 central-controller:	FORCE
 	make -j4 LDLIBS="-L/usr/pgsql-10/lib/ -lpq -Lext/librabbitmq/centos_x64/lib/ -lrabbitmq" CXXFLAGS="-I/usr/pgsql-10/include -I./ext/librabbitmq/centos_x64/include -fPIC" DEFS="-DZT_CONTROLLER_USE_LIBPQ -DZT_CONTROLLER" ZT_OFFICIAL=1 ZT_USE_X64_ASM_ED25519=1 one
@@ -344,9 +340,6 @@ central-controller-docker:	central-controller
 debug:	FORCE
 	make ZT_DEBUG=1 one
 	make ZT_DEBUG=1 selftest
-
-nltest: $(NLTEST_OBJS)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o nltest $(NLTEST_OBJS) $(LDLIBS)
 
 # Note: keep the symlinks in /var/lib/zerotier-one to the binaries since these
 # provide backward compatibility with old releases where the binaries actually
