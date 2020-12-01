@@ -120,3 +120,14 @@ __pycache__
 *~
 attic/world/*.c25519
 attic/world/mkworld
+
+# snapcraft specifics
+/parts/
+/stage/
+/prime/
+*.snap
+.snapcraft
+__pycache__
+*.pyc
+*_source.tar.bz2
+snap/.snapcraft
