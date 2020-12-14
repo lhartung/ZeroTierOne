@@ -47,7 +47,7 @@ passthrough:
 parts:
   zerotier-one:
     plugin: make
-    source: https://github.com/zerotier/ZeroTierOne.git
+    source: https://github.com/zerotier/ZeroTierOne/archive/1.6.1.zip
     build-packages:
       - build-essential
       - libc++-dev
