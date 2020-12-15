@@ -29,6 +29,7 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
 		"secondaryPort": 1-65535, /* If set, override default random secondary port */
 		"tertiaryPort": 1-65535, /* If set, override default random tertiary port */
 		"portMappingEnabled": true|false, /* If true (the default), try to use uPnP or NAT-PMP to map ports */
+		"allowSecondaryPort": true|false /* false will also disable secondary port */
 		"softwareUpdate": "apply"|"download"|"disable", /* Automatically apply updates, just download, or disable built-in software updates */
 		"softwareUpdateChannel": "release"|"beta", /* Software update channel */
 		"softwareUpdateDist": true|false, /* If true, distribute software updates (only really useful to ZeroTier, Inc. itself, default is false) */
@@ -138,6 +139,7 @@ Most network settings are not writable, as they are defined by the network contr
 | allowManaged          | boolean       | Allow IP and route management                     | yes      |
 | allowGlobal           | boolean       | Allow IPs and routes that overlap with global IPs | yes      |
 | allowDefault          | boolean       | Allow overriding of system default route          | yes      |
+| allowDNS              | boolean       | Allow configuration of DNS on network             | yes      |
 
 Route objects:
 

@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2025-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -183,7 +183,7 @@ bool Topology::isProhibitedEndpoint(const Address &ztaddr,const InetAddress &ipa
 	if (std::find(_upstreamAddresses.begin(),_upstreamAddresses.end(),ztaddr) != _upstreamAddresses.end()) {
 		for(std::vector<World::Root>::const_iterator r(_planet.roots().begin());r!=_planet.roots().end();++r) {
 			if (r->identity.address() == ztaddr) {
-				if (r->stableEndpoints.size() == 0)
+				if (r->stableEndpoints.empty())
 					return false; // no stable endpoints specified, so allow dynamic paths
 				for(std::vector<InetAddress>::const_iterator e(r->stableEndpoints.begin());e!=r->stableEndpoints.end();++e) {
 					if (ipaddr.ipsEqual(*e))
@@ -194,7 +194,7 @@ bool Topology::isProhibitedEndpoint(const Address &ztaddr,const InetAddress &ipa
 		for(std::vector<World>::const_iterator m(_moons.begin());m!=_moons.end();++m) {
 			for(std::vector<World::Root>::const_iterator r(m->roots().begin());r!=m->roots().end();++r) {
 				if (r->identity.address() == ztaddr) {
-					if (r->stableEndpoints.size() == 0)
+					if (r->stableEndpoints.empty())
 						return false; // no stable endpoints specified, so allow dynamic paths
 					for(std::vector<InetAddress>::const_iterator e(r->stableEndpoints.begin());e!=r->stableEndpoints.end();++e) {
 						if (ipaddr.ipsEqual(*e))
@@ -363,13 +363,15 @@ void Topology::_memoizeUpstreams(void *tPtr)
 	_amUpstream = false;
 
 	for(std::vector<World::Root>::const_iterator i(_planet.roots().begin());i!=_planet.roots().end();++i) {
-		if (i->identity == RR->identity) {
+		const Identity &id = i->identity;
+		if (id == RR->identity) {
 			_amUpstream = true;
-		} else if (std::find(_upstreamAddresses.begin(),_upstreamAddresses.end(),i->identity.address()) == _upstreamAddresses.end()) {
-			_upstreamAddresses.push_back(i->identity.address());
-			SharedPtr<Peer> &hp = _peers[i->identity.address()];
-			if (!hp)
-				hp = new Peer(RR,RR->identity,i->identity);
+		} else if (std::find(_upstreamAddresses.begin(),_upstreamAddresses.end(),id.address()) == _upstreamAddresses.end()) {
+			_upstreamAddresses.push_back(id.address());
+			SharedPtr<Peer> &hp = _peers[id.address()];
+			if (!hp) {
+				hp = new Peer(RR,RR->identity,id);
+			}
 		}
 	}
 
